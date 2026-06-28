@@ -1,0 +1,19 @@
+{
+  "name": "lingflow-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.4",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "typecheck": "turbo typecheck",
+    "lint": "turbo lint",
+    "test": "turbo test"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.3",
+    "turbo": "^2.10.0",
+    "typescript": "~6.0.2"
+  }
+}
