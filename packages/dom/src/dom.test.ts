@@ -54,13 +54,13 @@ describe('@lingflow/dom', () => {
       text: 'Translated text',
       sourceText: segment!.text,
       targetLanguage: 'zh-CN',
-      provider: 'mock',
+      provider: 'baidu-free',
     });
     injectBilingualText(segment!, {
       text: 'Translated text again',
       sourceText: segment!.text,
       targetLanguage: 'zh-CN',
-      provider: 'mock',
+      provider: 'baidu-free',
     });
 
     expect(document.querySelectorAll('[data-lingflow-injected="true"]')).toHaveLength(1);

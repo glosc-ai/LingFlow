@@ -5,20 +5,16 @@ import {
   type ReadableSegment,
 } from '../types.js';
 
-const BLOCK_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, blockquote, dd, dt, td, th, figcaption';
-const SKIP_SELECTOR = [
+const DEFAULT_BLOCK_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, blockquote, dd, dt, td, th, figcaption';
+const FULL_PAGE_BLOCK_SELECTOR = `${DEFAULT_BLOCK_SELECTOR}, a, span`;
+const BASE_SKIP_SELECTOR = [
   'script',
   'style',
   'noscript',
   'textarea',
   'input',
-  'button',
   'select',
   'option',
-  'nav',
-  'header',
-  'footer',
-  'aside',
   'code',
   'pre',
   'svg',
@@ -26,13 +22,11 @@ const SKIP_SELECTOR = [
   'iframe',
   '[hidden]',
   '[aria-hidden="true"]',
-  '[role="button"]',
-  '[role="navigation"]',
-  '[role="menu"]',
-  '[role="menubar"]',
-  '[role="tablist"]',
   `[${LINGFLOW_INJECTED_ATTRIBUTE}]`,
 ].join(',');
+
+const PAGE_CHROME_SKIP_SELECTOR = 'nav, header, footer, aside, [role="navigation"]';
+const INTERACTIVE_SKIP_SELECTOR = 'button, [role="button"], [role="menu"], [role="menubar"], [role="tablist"]';
 
 const CONTENT_ROOT_SELECTOR = [
   'article',
@@ -51,8 +45,9 @@ export function extractReadableSegments(
 ): ReadableSegment[] {
   const minTextLength = options.minTextLength ?? 12;
   const maxSegments = options.maxSegments ?? 120;
-  const scope = pickReadableScope(root);
-  const elements = Array.from(scope.querySelectorAll<HTMLElement>(BLOCK_SELECTOR));
+  const blockSelector = options.scope === 'document' ? FULL_PAGE_BLOCK_SELECTOR : DEFAULT_BLOCK_SELECTOR;
+  const scope = options.scope === 'document' ? root : pickReadableScope(root);
+  const elements = Array.from(scope.querySelectorAll<HTMLElement>(blockSelector));
   const segments: ReadableSegment[] = [];
   const seen = new Set<HTMLElement>();
 
@@ -61,7 +56,7 @@ export function extractReadableSegments(
       break;
     }
 
-    if (seen.has(element) || shouldSkipElement(element) || hasReadableBlockChild(element)) {
+    if (seen.has(element) || shouldSkipElement(element, options) || hasReadableBlockChild(element) || isRedundantInlineElement(element)) {
       continue;
     }
 
@@ -106,8 +101,14 @@ export function findReadableSegmentFromSelection(
   return { id, element: block, text };
 }
 
-function shouldSkipElement(element: HTMLElement) {
-  if (element.closest(SKIP_SELECTOR)) {
+function shouldSkipElement(element: HTMLElement, options: ExtractReadableSegmentsOptions = {}) {
+  const skipSelectors = [
+    BASE_SKIP_SELECTOR,
+    options.includePageChrome ? '' : PAGE_CHROME_SKIP_SELECTOR,
+    options.includeInteractiveText ? '' : INTERACTIVE_SKIP_SELECTOR,
+  ].filter(Boolean).join(',');
+
+  if (element.closest(skipSelectors)) {
     return true;
   }
 
@@ -120,7 +121,15 @@ function shouldSkipElement(element: HTMLElement) {
 }
 
 function hasReadableBlockChild(element: HTMLElement) {
-  return Array.from(element.children).some((child) => child.matches(BLOCK_SELECTOR));
+  return Array.from(element.children).some((child) => child.matches(DEFAULT_BLOCK_SELECTOR));
+}
+
+function isRedundantInlineElement(element: HTMLElement) {
+  if (!element.matches('a, span')) {
+    return false;
+  }
+
+  return Boolean(element.parentElement?.closest(DEFAULT_BLOCK_SELECTOR));
 }
 
 function pickReadableScope(root: ParentNode) {
@@ -147,7 +156,7 @@ function pickReadableScope(root: ParentNode) {
 function findNearestReadableBlock(element?: Element | null) {
   let current: Element | null | undefined = element;
   while (current && current !== document.body) {
-    if (current instanceof HTMLElement && current.matches(BLOCK_SELECTOR)) {
+    if (current instanceof HTMLElement && current.matches(DEFAULT_BLOCK_SELECTOR)) {
       return current;
     }
 

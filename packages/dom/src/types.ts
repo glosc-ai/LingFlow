@@ -9,6 +9,9 @@ export interface ReadableSegment {
 export interface ExtractReadableSegmentsOptions {
   readonly minTextLength?: number;
   readonly maxSegments?: number;
+  readonly scope?: 'readable' | 'document';
+  readonly includePageChrome?: boolean;
+  readonly includeInteractiveText?: boolean;
 }
 
 export interface BilingualSegment {
@@ -16,7 +19,7 @@ export interface BilingualSegment {
   readonly translation?: TranslationResponse;
 }
 
-export type InjectionMode = 'below' | 'replace';
+export type InjectionMode = 'below' | 'inline' | 'replace';
 
 export interface InjectBilingualTextOptions {
   readonly mode?: InjectionMode;
