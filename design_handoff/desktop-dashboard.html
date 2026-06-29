@@ -1,0 +1,1904 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>灵流 LingFlow · 翻译控制台</title>
+<style>
+/* ===== LingFlow Design System Tokens ===== */
+:root {
+  /* Light mode */
+  --bg:            oklch(98% 0.005 245);
+  --surface:       oklch(100% 0 0);
+  --surface-raised:oklch(97% 0.008 245);
+  --fg:            oklch(18% 0.02 250);
+  --muted:         oklch(48% 0.018 250);
+  --border:        oklch(90% 0.008 245);
+  --primary:       oklch(52% 0.16 240);
+  --primary-hover: oklch(48% 0.17 240);
+  --primary-ghost: oklch(52% 0.16 240 / 0.08);
+  --accent:        oklch(62% 0.14 195);
+  --accent-ghost:  oklch(62% 0.14 195 / 0.10);
+  --toggle-off:    #D8E7EF;
+  --toggle-off-border: #B7CCD8;
+  --toggle-on:     #12BFA8;
+  --toggle-on-border: #0E9F8E;
+  --success:       oklch(58% 0.16 160);
+  --success-ghost: oklch(58% 0.16 160 / 0.10);
+  --warning:       oklch(65% 0.14 85);
+  --warning-ghost: oklch(65% 0.14 85 / 0.10);
+  --danger:        oklch(52% 0.18 25);
+  --danger-ghost:  oklch(52% 0.18 25 / 0.08);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 1px 2px oklch(0% 0 0 / 0.04);
+  --shadow-md: 0 4px 12px oklch(0% 0 0 / 0.06);
+  --shadow-lg: 0 8px 24px oklch(0% 0 0 / 0.08);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --transition-fast: 150ms ease;
+  --transition-base: 250ms ease;
+  --transition-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Dark mode */
+.dark {
+  --bg:            oklch(15% 0.025 250);
+  --surface:       oklch(20% 0.02 250);
+  --surface-raised:oklch(24% 0.022 250);
+  --fg:            oklch(95% 0.005 245);
+  --muted:         oklch(62% 0.015 250);
+  --border:        oklch(28% 0.018 250);
+  --primary:       oklch(64% 0.16 240);
+  --primary-hover: oklch(68% 0.17 240);
+  --primary-ghost: oklch(64% 0.16 240 / 0.12);
+  --accent:        oklch(70% 0.14 195);
+  --accent-ghost:  oklch(70% 0.14 195 / 0.12);
+  --toggle-off:    #24313B;
+  --toggle-off-border: #3A4C58;
+  --toggle-on:     #20D6BE;
+  --toggle-on-border: #28E2C9;
+  --success:       oklch(64% 0.16 160);
+  --success-ghost: oklch(64% 0.16 160 / 0.12);
+  --warning:       oklch(70% 0.14 85);
+  --warning-ghost: oklch(70% 0.14 85 / 0.12);
+  --danger:        oklch(58% 0.18 25);
+  --danger-ghost:  oklch(58% 0.18 25 / 0.12);
+
+  --shadow-sm: 0 1px 2px oklch(0% 0 0 / 0.2);
+  --shadow-md: 0 4px 12px oklch(0% 0 0 / 0.3);
+  --shadow-lg: 0 8px 24px oklch(0% 0 0 / 0.4);
+}
+
+/* ===== Reset & Base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; -webkit-font-smoothing: antialiased; }
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--fg);
+  min-height: 100vh;
+  transition: background var(--transition-base), color var(--transition-base);
+}
+
+/* ===== Layout Grid ===== */
+.app-shell {
+  display: grid;
+  grid-template-columns: clamp(208px, 16vw, 240px) minmax(560px, 1fr) clamp(280px, 22vw, 320px);
+  grid-template-rows: 56px 1fr;
+  grid-template-areas:
+    "topbar topbar topbar"
+    "sidebar main aside";
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ===== Top Bar ===== */
+.topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+  user-select: none;
+  z-index: 10;
+}
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 650;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+.topbar-brand svg { width: 24px; height: 24px; }
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+.topbar-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 550;
+  transition: all var(--transition-fast);
+}
+.topbar-link:hover {
+  background: var(--primary-ghost);
+  color: var(--primary);
+  border-color: var(--primary);
+}
+.topbar-link svg { width: 16px; height: 16px; }
+button.topbar-link { font-family: inherit; cursor: pointer; }
+
+/* ===== Sidebar ===== */
+.sidebar {
+  grid-area: sidebar;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
+  gap: 4px;
+  overflow-y: auto;
+}
+.nav-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 12px 12px 6px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  text-decoration: none;
+}
+.nav-item:hover { background: var(--primary-ghost); color: var(--fg); }
+.nav-item.active { background: var(--primary-ghost); color: var(--primary); font-weight: 600; }
+.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.7; }
+.nav-item.active svg { opacity: 1; }
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* ===== Main Content ===== */
+.main {
+  grid-area: main;
+  overflow-y: auto;
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* ===== Right Aside ===== */
+.aside {
+  grid-area: aside;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ===== Compact Status Bar ===== */
+.status-bar-compact {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.orb-mini {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: radial-gradient(circle at 40% 35%, oklch(72% 0.12 210 / 0.6), var(--primary));
+  box-shadow: 0 0 12px oklch(52% 0.16 240 / 0.25);
+  animation: orb-breathe 3s ease-in-out infinite;
+  position: relative;
+}
+.orb-mini::after {
+  content: '';
+  position: absolute;
+  top: 20%; left: 25%;
+  width: 6px; height: 4px;
+  background: oklch(100% 0 0 / 0.45);
+  border-radius: 50%;
+  transform: rotate(-20deg);
+}
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+.status-bar-compact .status-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.status-bar-compact .status-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.status-bar-compact .status-detail {
+  font-size: 12px;
+  color: var(--muted);
+}
+.status-bar-compact .status-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.status-dot-live {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ===== Translation Workspace ===== */
+.translate-workspace {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto 1fr auto;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+.translate-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.translate-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  gap: 10px;
+}
+.translate-panel-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.lang-select {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+.lang-select:focus { outline: none; border-color: var(--primary); }
+.translate-textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 200px;
+  padding: 16px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1.7;
+  font-family: var(--font-sans);
+  resize: none;
+  outline: none;
+}
+.translate-textarea::placeholder { color: var(--muted); opacity: 0.6; }
+.translate-output {
+  flex: 1;
+  min-height: 200px;
+  padding: 16px;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--fg);
+  overflow-y: auto;
+}
+.translate-output .placeholder {
+  color: var(--muted);
+  opacity: 0.5;
+  font-style: italic;
+}
+.translate-panel-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.char-count { font-family: var(--font-mono); }
+
+/* Swap button between panels */
+.swap-btn {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  z-index: 2;
+}
+.swap-btn:hover { background: var(--primary-ghost); color: var(--primary); border-color: var(--primary); }
+.swap-btn svg { width: 16px; height: 16px; }
+
+/* ===== Translate Action Bar ===== */
+.translate-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+.translate-actions .btn-primary {
+  padding: 10px 28px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.btn-icon-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.btn-icon-text svg { width: 15px; height: 15px; }
+
+/* ===== Shimmer loading ===== */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.translate-output.loading {
+  background: linear-gradient(90deg, var(--surface-raised) 25%, var(--border) 50%, var(--surface-raised) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+  border-radius: var(--radius-md);
+  margin: 12px;
+  min-height: 60px;
+}
+
+/* ===== Aside Cards ===== */
+.aside-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+}
+.aside-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.aside-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.aside-card-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  background: var(--success-ghost);
+  color: var(--success);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ===== Provider Mini Cards ===== */
+.provider-mini {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  font-size: 13px;
+}
+.provider-mini:hover { background: var(--primary-ghost); }
+.provider-mini.active { background: var(--primary-ghost); }
+.provider-mini-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.provider-mini-dot.free { background: var(--muted); }
+.provider-mini-dot.ai { background: var(--accent); }
+.provider-mini-name { flex: 1; font-weight: 500; }
+.provider-mini-status {
+  font-size: 11px;
+  color: var(--success);
+  font-weight: 500;
+}
+
+/* ===== Toggle Switch ===== */
+.toggle-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.toggle-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+/* Buttons, theme buttons, toggles and form rows are shared in shared-components.css. */
+
+/* ===== Inputs ===== */
+.input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  transition: border-color var(--transition-fast);
+}
+.input:focus { outline: none; border-color: var(--primary); }
+.input::placeholder { color: var(--muted); font-family: var(--font-sans); }
+
+/* ===== Recent Activity ===== */
+.recent-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.recent-item:last-child { border-bottom: none; }
+.recent-lang {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--primary-ghost);
+  color: var(--primary);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.recent-text { flex: 1; color: var(--fg); }
+.recent-time { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+
+/* ===== View Switching ===== */
+.view-panel { display: none; }
+.view-panel.active {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  flex: 1;
+  min-height: 0;
+  animation: view-panel-enter 180ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@keyframes view-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ===== Settings View ===== */
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.settings-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-section-title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.settings-section-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settings-section.full-width { grid-column: 1 / -1; }
+
+/* Provider config card */
+.config-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+.config-card:hover {
+  border-color: color-mix(in oklch, var(--accent) 34%, var(--border));
+  box-shadow: 0 8px 18px oklch(18% 0.02 250 / 0.08);
+  transform: translateY(-1px);
+}
+.config-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.config-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.config-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.config-dot.free { background: var(--muted); }
+.config-dot.ai { background: var(--accent); }
+.config-eye {
+  position: absolute;
+  right: 4px; top: 50%;
+  transform: translateY(-50%);
+  width: 26px; height: 26px;
+  border: none; background: none;
+  cursor: pointer;
+  color: var(--muted);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm);
+}
+.config-eye:hover { color: var(--fg); }
+.config-eye svg { width: 14px; height: 14px; }
+.config-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.config-test-result {
+  font-size: 11.5px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  display: none;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.config-test-result.show { display: flex; }
+.config-test-result.success { background: var(--success-ghost); color: var(--success); }
+.config-test-result.error { background: var(--danger-ghost); color: var(--danger); }
+
+@media (prefers-reduced-motion: reduce) {
+  .view-panel.active {
+    animation: none;
+  }
+
+  .config-card,
+  .config-card:hover {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* AI budget notice */
+.ai-notice {
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--warning-ghost);
+  border: 1px solid oklch(65% 0.14 85 / 0.2);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--warning);
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.ai-notice svg { width: 15px; height: 15px; flex-shrink: 0; margin-top: 1px; }
+
+/* ===== History View ===== */
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.history-search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+.history-search svg { width: 15px; height: 15px; color: var(--muted); flex-shrink: 0; }
+.history-search input {
+  flex: 1;
+  border: none;
+  background: none;
+  color: var(--fg);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+}
+.history-search input::placeholder { color: var(--muted); }
+.history-filter {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.history-filter:focus { outline: none; border-color: var(--primary); }
+
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.history-item {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.history-item:last-child { border-bottom: none; }
+.history-item:hover { background: var(--primary-ghost); }
+.history-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.history-lang-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--primary-ghost);
+  color: var(--primary);
+  white-space: nowrap;
+}
+.history-provider {
+  font-size: 11px;
+  color: var(--muted);
+}
+.history-source {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-target {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-meta {
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.history-meta .time { font-family: var(--font-mono); }
+
+.history-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px;
+}
+.page-btn {
+  width: 32px; height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  display: flex; align-items: center; justify-content: center;
+  transition: all var(--transition-fast);
+}
+.page-btn:hover { background: var(--primary-ghost); color: var(--primary); border-color: var(--primary); }
+.page-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+/* ===== Responsive ===== */
+@media (max-width: 1100px) {
+  .app-shell { grid-template-columns: 200px 1fr; grid-template-areas: "topbar topbar" "sidebar main"; }
+  .aside { display: none; }
+  .settings-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+  .app-shell { grid-template-columns: 1fr; grid-template-areas: "topbar" "main"; }
+  .sidebar { display: none; }
+  .main { padding: 16px; }
+  .translate-workspace { grid-template-columns: 1fr; }
+  .swap-btn { display: none; }
+}
+</style>
+<link rel="stylesheet" href="shared-components.css">
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- ===== Top Bar ===== -->
+  <header class="topbar">
+    <div class="topbar-brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2Z"/>
+        <path d="M8 12c0-2 .8-3.8 2-5"/>
+        <path d="M14 7c1.2 1.2 2 3 2 5"/>
+        <path d="M7 14c1 1.5 2.8 2.5 5 2.5s4-1 5-2.5"/>
+      </svg>
+      灵流 LingFlow
+    </div>
+    <div class="topbar-actions">
+      <button class="theme-btn" id="themeToggle" title="切换 Light / Dark 模式" aria-label="切换主题">
+        <svg id="themeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===== Sidebar ===== -->
+  <nav class="sidebar">
+    <div class="nav-section-label">导航</div>
+    <button class="nav-item active" data-view="console">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      控制台
+    </button>
+    <button class="nav-item" data-view="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      服务源配置
+    </button>
+    <button class="nav-item" data-view="system-settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      系统设置
+    </button>
+    <button class="nav-item" data-view="history">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      翻译历史
+    </button>
+    <div class="nav-section-label">快捷操作</div>
+    <button class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      读取剪贴板
+    </button>
+    <button class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      导出记录
+    </button>
+
+    <div class="sidebar-footer">
+      <button class="nav-item" style="color:var(--muted)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        关于 v0.1.0
+      </button>
+    </div>
+  </nav>
+
+  <!-- ===== Main Content ===== -->
+  <main class="main">
+
+    <!-- Compact Status Bar (shared across views) -->
+    <div class="status-bar-compact" data-od-id="status-bar">
+      <div class="orb-mini"></div>
+      <div class="status-info">
+        <span class="status-label">灵流服务运行中</span>
+        <span class="status-detail">剪贴板监听 · 网页自动翻译 · DeepSeek AI</span>
+      </div>
+      <div class="status-meta">
+        <span class="status-dot-live"></span>
+        <span>今日 12,847 字</span>
+        <span>|</span>
+        <span>节省 4.2 小时</span>
+      </div>
+    </div>
+
+    <!-- ===== VIEW: Console ===== -->
+    <div class="view-panel active" id="view-console">
+
+      <!-- Translation Workspace -->
+      <div class="translate-workspace" style="position:relative">
+
+        <!-- Source Panel -->
+        <div class="translate-panel">
+          <div class="translate-panel-header">
+            <span class="translate-panel-label">原文</span>
+            <select class="lang-select" id="sourceLang">
+              <option value="auto" selected>自动检测</option>
+              <option value="en">English</option>
+              <option value="zh">中文</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+              <option value="es">Español</option>
+              <option value="ru">Русский</option>
+              <option value="ar">العربية</option>
+            </select>
+          </div>
+          <textarea class="translate-textarea" id="sourceText" placeholder="输入或粘贴要翻译的文本…&#10;支持自动检测语言，也可手动选择源语言。">The quick brown fox jumps over the lazy dog. Machine learning has transformed how we approach natural language processing, enabling real-time translation across hundreds of language pairs with remarkable accuracy.</textarea>
+          <div class="translate-panel-footer">
+            <span class="char-count" id="charCount">189 字符</span>
+            <button class="btn btn-ghost btn-sm" onclick="clearSource()" style="margin-left:auto">清空</button>
+            <button class="btn btn-ghost btn-sm" onclick="pasteClipboard()">从剪贴板粘贴</button>
+          </div>
+        </div>
+
+        <!-- Swap Button -->
+        <button class="swap-btn" onclick="swapLanguages()" title="交换语言方向">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="7 16 12 21 17 16"/><polyline points="7 8 12 3 17 8"/>
+            <line x1="12" y1="3" x2="12" y2="21"/>
+          </svg>
+        </button>
+
+        <!-- Target Panel -->
+        <div class="translate-panel">
+          <div class="translate-panel-header">
+            <span class="translate-panel-label">译文</span>
+            <select class="lang-select" id="targetLang">
+              <option value="zh-CN" selected>简体中文</option>
+              <option value="zh-TW">繁體中文</option>
+              <option value="en">English</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+              <option value="es">Español</option>
+              <option value="ru">Русский</option>
+              <option value="ar">العربية</option>
+            </select>
+          </div>
+          <div class="translate-output" id="translationOutput">
+            <span class="placeholder">点击「翻译」按钮开始翻译…</span>
+          </div>
+          <div class="translate-panel-footer">
+            <span id="translationMeta">等待翻译</span>
+            <button class="btn btn-ghost btn-sm" onclick="copyTranslation()" style="margin-left:auto">复制译文</button>
+          </div>
+        </div>
+
+        <!-- Action Bar -->
+        <div class="translate-actions">
+          <button class="btn btn-primary" id="translateBtn" onclick="doTranslate()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px">
+              <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2Z"/>
+              <path d="M8 12c0-2 .8-3.8 2-5"/><path d="M14 7c1.2 1.2 2 3 2 5"/>
+              <path d="M7 14c1 1.5 2.8 2.5 5 2.5s4-1 5-2.5"/>
+            </svg>
+            翻译
+          </button>
+          <select class="lang-select" id="providerSelect" style="padding:8px 12px;font-size:13px">
+            <option value="google-free">Google Cloud</option>
+            <option value="baidu-free">百度翻译</option>
+            <option value="deepl">DeepL</option>
+            <option value="microsoft">Microsoft Translator</option>
+            <option value="youdao">有道智云</option>
+            <option value="tencent">腾讯云 TMT</option>
+            <option value="ai" selected>AI (DeepSeek)</option>
+          </select>
+          <span style="font-size:12px;color:var(--muted)">引擎</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== VIEW: Settings ===== -->
+    <div class="view-panel" id="view-settings">
+
+      <div class="settings-grid">
+
+        <!-- Free Translation Section -->
+        <div class="settings-section">
+          <div class="settings-section-header">
+            <span class="settings-section-title">基础免费机翻</span>
+            <span style="font-size:11px;color:var(--muted)">无需 AI 密钥</span>
+          </div>
+          <div class="settings-section-body">
+
+            <!-- Google Cloud -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot free"></span> Google Cloud Translation</span>
+                <label class="toggle"><input type="checkbox" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">API Key</span>
+                  <div class="config-input-wrap">
+                    <input class="config-input" type="password" placeholder="Google Cloud API Key" value="AIzaSyD••••••••••••••">
+                    <button class="config-eye" onclick="toggleConfigPw(this)" title="显示/隐藏">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="config-actions">
+                <button class="btn btn-ghost btn-sm test-config-btn" data-name="Google Cloud">测试连接</button>
+              </div>
+              <div class="config-test-result" data-result="google"></div>
+            </div>
+
+            <!-- Baidu -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot free"></span> 百度翻译</span>
+                <label class="toggle"><input type="checkbox"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">APP ID</span>
+                  <input class="config-input" placeholder="百度翻译 APP ID">
+                </div>
+                <div>
+                  <span class="config-field-label">Secret Key</span>
+                  <div class="config-input-wrap">
+                    <input class="config-input" type="password" placeholder="百度翻译 Secret Key">
+                    <button class="config-eye" onclick="toggleConfigPw(this)" title="显示/隐藏">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="config-actions">
+                <button class="btn btn-ghost btn-sm test-config-btn" data-name="百度翻译">测试连接</button>
+              </div>
+              <div class="config-test-result" data-result="baidu"></div>
+            </div>
+
+            <!-- DeepL -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot free"></span> DeepL</span>
+                <label class="toggle"><input type="checkbox"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">API 类型</span>
+                  <select class="config-input" style="font-family:var(--font-sans)">
+                    <option value="free">DeepL API Free</option>
+                    <option value="pro">DeepL API Pro</option>
+                  </select>
+                </div>
+                <div>
+                  <span class="config-field-label">API Key</span>
+                  <div class="config-input-wrap">
+                    <input class="config-input" type="password" placeholder="DeepL API Key">
+                    <button class="config-eye" onclick="toggleConfigPw(this)" title="显示/隐藏">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="config-actions">
+                <button class="btn btn-ghost btn-sm test-config-btn" data-name="DeepL">测试连接</button>
+              </div>
+              <div class="config-test-result" data-result="deepl"></div>
+            </div>
+
+            <!-- Microsoft -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot free"></span> Microsoft Translator</span>
+                <label class="toggle"><input type="checkbox"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">API Key</span>
+                  <div class="config-input-wrap">
+                    <input class="config-input" type="password" placeholder="Azure Translator Key">
+                    <button class="config-eye" onclick="toggleConfigPw(this)" title="显示/隐藏">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <span class="config-field-label">Region</span>
+                  <input class="config-input" placeholder="例如 eastasia" style="font-family:var(--font-sans)">
+                </div>
+              </div>
+              <div class="config-actions">
+                <button class="btn btn-ghost btn-sm test-config-btn" data-name="Microsoft">测试连接</button>
+              </div>
+              <div class="config-test-result" data-result="microsoft"></div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- AI Translation Section -->
+        <div class="settings-section">
+          <div class="settings-section-header">
+            <span class="settings-section-title">高级 AI 翻译</span>
+            <span style="font-size:11px;color:var(--accent)">BYO-Key</span>
+          </div>
+          <div class="settings-section-body">
+
+            <div class="ai-notice">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <span>AI 翻译使用 BYO-Key 模式，密钥仅保存在本地 localStorage。可在模型设置中自定义 System Prompt 以优化翻译风格和术语一致性。API 费用由您的服务商账户承担。</span>
+            </div>
+
+            <!-- OpenAI / DeepSeek -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot ai"></span> OpenAI / DeepSeek</span>
+                <label class="toggle"><input type="checkbox" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">Base URL</span>
+                  <input class="config-input" placeholder="https://api.deepseek.com" value="https://api.deepseek.com" style="font-family:var(--font-sans)">
+                </div>
+                <div>
+                  <span class="config-field-label">API Key</span>
+                  <div class="config-input-wrap">
+                    <input class="config-input" type="password" placeholder="sk-••••••••••••••••" value="sk-••••••••••••••••">
+                    <button class="config-eye" onclick="toggleConfigPw(this)" title="显示/隐藏">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <span class="config-field-label">模型</span>
+                  <select class="config-input" style="font-family:var(--font-sans)">
+                    <option>deepseek-chat</option>
+                    <option>gpt-4.1-mini</option>
+                    <option>gpt-4.1</option>
+                    <option>claude-sonnet-4-6</option>
+                    <option>claude-opus-4-8</option>
+                  </select>
+                </div>
+              </div>
+              <div class="config-actions">
+                <button class="btn btn-ghost btn-sm test-config-btn" data-name="DeepSeek AI">测试连接</button>
+                <button class="btn btn-ghost btn-sm" style="color:var(--accent)">编辑 Prompt</button>
+              </div>
+              <div class="config-test-result" data-result="ai"></div>
+            </div>
+
+            <!-- Anthropic -->
+            <div class="config-card">
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot ai"></span> Anthropic Claude</span>
+                <label class="toggle"><input type="checkbox"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">API Key</span>
+                  <div class="config-input-wrap">
+                    <input class="config-input" type="password" placeholder="sk-ant-••••••••••••••••">
+                    <button class="config-eye" onclick="toggleConfigPw(this)" title="显示/隐藏">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <span class="config-field-label">模型</span>
+                  <select class="config-input" style="font-family:var(--font-sans)">
+                    <option>claude-sonnet-4-6</option>
+                    <option>claude-opus-4-8</option>
+                    <option>claude-haiku-4-5</option>
+                  </select>
+                </div>
+              </div>
+              <div class="config-actions">
+                <button class="btn btn-ghost btn-sm test-config-btn" data-name="Anthropic Claude">测试连接</button>
+              </div>
+              <div class="config-test-result" data-result="anthropic"></div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Other Providers -->
+        <div class="settings-section">
+          <div class="settings-section-header">
+            <span class="settings-section-title">其他翻译服务</span>
+          </div>
+          <div class="settings-section-body">
+
+            <div class="config-card">
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot free"></span> 有道智云</span>
+                <label class="toggle"><input type="checkbox"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">App Key</span>
+                  <input class="config-input" placeholder="有道 App Key" style="font-family:var(--font-sans)">
+                </div>
+                <div>
+                  <span class="config-field-label">App Secret</span>
+                  <div class="config-input-wrap">
+                    <input class="config-input" type="password" placeholder="有道 App Secret">
+                    <button class="config-eye" onclick="toggleConfigPw(this)" title="显示/隐藏">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="config-actions">
+                <button class="btn btn-ghost btn-sm test-config-btn" data-name="有道智云">测试连接</button>
+              </div>
+              <div class="config-test-result" data-result="youdao"></div>
+            </div>
+
+            <div class="config-card">
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot free"></span> 腾讯云 TMT</span>
+                <label class="toggle"><input type="checkbox"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">SecretId</span>
+                  <input class="config-input" placeholder="腾讯云 SecretId" style="font-family:var(--font-sans)">
+                </div>
+                <div>
+                  <span class="config-field-label">SecretKey</span>
+                  <div class="config-input-wrap">
+                    <input class="config-input" type="password" placeholder="腾讯云 SecretKey">
+                    <button class="config-eye" onclick="toggleConfigPw(this)" title="显示/隐藏">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <span class="config-field-label">Region</span>
+                  <input class="config-input" placeholder="ap-guangzhou" value="ap-guangzhou" style="font-family:var(--font-sans)">
+                </div>
+              </div>
+              <div class="config-actions">
+                <button class="btn btn-ghost btn-sm test-config-btn" data-name="腾讯云 TMT">测试连接</button>
+              </div>
+              <div class="config-test-result" data-result="tencent"></div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Save Section -->
+        <div class="settings-section full-width" style="padding:16px 20px;display:flex;align-items:center;justify-content:flex-end;gap:10px;border:none;background:transparent">
+          <button class="btn btn-ghost">恢复默认</button>
+          <button class="btn btn-primary">保存全部配置</button>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ===== VIEW: System Settings ===== -->
+    <div class="view-panel" id="view-system-settings">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:20px">
+        <div>
+          <h2 style="font-size:22px;font-weight:650;letter-spacing:-0.02em;margin-bottom:6px">系统设置</h2>
+          <p style="font-size:13.5px;color:var(--muted);line-height:1.6">配置灵流的桌面行为、翻译偏好、自动化和隐私策略。服务商 API Key 请继续在“服务源配置”中管理。</p>
+        </div>
+        <button class="btn btn-primary" onclick="showInlineToast('系统设置已保存到本地')">保存设置</button>
+      </div>
+
+      <div class="settings-grid">
+        <div class="settings-section" data-od-id="system-general">
+          <div class="settings-section-header">
+            <span class="settings-section-title">通用</span>
+            <span style="font-size:11px;color:var(--muted)">桌面端</span>
+          </div>
+          <div class="settings-section-body">
+            <div class="config-card">
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">界面语言</span>
+                  <select class="config-input" id="uiLang" onchange="saveSetting('uiLang', this.value)" style="font-family:var(--font-sans); width:min(100%, 172px); max-width:100%; min-width:0; box-sizing:border-box; justify-self:end; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                    <option value="zh-CN" selected>简体中文</option>
+                    <option value="zh-TW">繁體中文</option>
+                    <option value="en">English</option>
+                    <option value="ja">日本語</option>
+                    <option value="ko">한국어</option>
+                  </select>
+                </div>
+                <div>
+                  <span class="config-field-label">启动行为</span>
+                  <select class="config-input" id="launchMode" onchange="saveSetting('launchMode', this.value)" style="font-family:var(--font-sans)">
+                    <option value="service" selected>启动后开启翻译服务</option>
+                    <option value="silent">静默驻留托盘</option>
+                    <option value="manual">仅打开控制台</option>
+                  </select>
+                </div>
+              </div>
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot free"></span> 开机自启</span>
+                <label class="toggle"><input type="checkbox" onchange="saveToggle('bootStart', this.checked)"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot free"></span> 关闭窗口时最小化到系统托盘</span>
+                <label class="toggle"><input type="checkbox" checked onchange="saveToggle('minimizeToTray', this.checked)"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-od-id="system-translation">
+          <div class="settings-section-header">
+            <span class="settings-section-title">翻译偏好</span>
+            <span style="font-size:11px;color:var(--accent)">默认路径</span>
+          </div>
+          <div class="settings-section-body">
+            <div class="config-card">
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">默认翻译引擎</span>
+                  <select class="config-input" id="defaultProvider" onchange="saveSetting('defaultProvider', this.value)" style="font-family:var(--font-sans)">
+                    <option value="google-free">Google Cloud</option>
+                    <option value="baidu-free">百度翻译</option>
+                    <option value="deepl">DeepL</option>
+                    <option value="microsoft">Microsoft Translator</option>
+                    <option value="ai" selected>AI (DeepSeek)</option>
+                  </select>
+                </div>
+                <div>
+                  <span class="config-field-label">默认目标语言</span>
+                  <select class="config-input" id="defaultTargetLang" onchange="saveSetting('defaultTargetLang', this.value)" style="font-family:var(--font-sans)">
+                    <option value="zh-CN" selected>简体中文</option>
+                    <option value="zh-TW">繁體中文</option>
+                    <option value="en">English</option>
+                    <option value="ja">日本語</option>
+                    <option value="ko">한국어</option>
+                  </select>
+                </div>
+                <div>
+                  <span class="config-field-label">双语注入样式</span>
+                  <select class="config-input" id="injectStyle" onchange="saveSetting('injectStyle', this.value)" style="font-family:var(--font-sans)">
+                    <option value="block" selected>段落对照</option>
+                    <option value="inline">行内对照</option>
+                    <option value="side">侧栏对照</option>
+                  </select>
+                </div>
+              </div>
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot ai"></span> 自动检测源语言</span>
+                <label class="toggle"><input type="checkbox" checked onchange="saveToggle('autoDetectLang', this.checked)"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-od-id="system-automation">
+          <div class="settings-section-header">
+            <span class="settings-section-title">剪贴板与自动化</span>
+            <span style="font-size:11px;color:var(--muted)">快捷任务</span>
+          </div>
+          <div class="settings-section-body">
+            <div class="config-card">
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot ai"></span> 启用剪贴板监听</span>
+                <label class="toggle"><input type="checkbox" checked onchange="saveToggle('clipboardWatch', this.checked)"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+              <div class="config-card-header">
+                <span class="config-card-name"><span class="config-dot free"></span> 复制后自动翻译</span>
+                <label class="toggle"><input type="checkbox" onchange="saveToggle('autoTranslateClipboard', this.checked)"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+              </div>
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">剪贴板最小字符数</span>
+                  <input class="config-input" id="clipMinChars" type="number" min="1" max="100" value="3" onchange="saveSetting('clipMinChars', this.value)">
+                </div>
+                <div>
+                  <span class="config-field-label">全局翻译快捷键</span>
+                  <button class="btn btn-ghost btn-sm" onclick="showInlineToast('按下新的快捷键组合即可录制（演示）')">Ctrl + Shift + T</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-od-id="system-appearance">
+          <div class="settings-section-header">
+            <span class="settings-section-title">外观</span>
+            <span style="font-size:11px;color:var(--muted)">Light / Dark</span>
+          </div>
+          <div class="settings-section-body">
+            <div class="config-card">
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">主题模式</span>
+                  <select class="config-input" id="themeMode" onchange="handleThemeMode(this.value)" style="font-family:var(--font-sans)">
+                    <option value="light">明亮模式</option>
+                    <option value="dark">暗黑模式</option>
+                    <option value="system" selected>跟随系统</option>
+                  </select>
+                </div>
+                <div>
+                  <span class="config-field-label">界面密度</span>
+                  <select class="config-input" id="uiDensity" onchange="saveSetting('uiDensity', this.value)" style="font-family:var(--font-sans)">
+                    <option value="compact">紧凑</option>
+                    <option value="normal" selected>标准</option>
+                    <option value="comfortable">舒适</option>
+                  </select>
+                </div>
+                <div>
+                  <span class="config-field-label">翻译弹窗位置</span>
+                  <select class="config-input" id="popupPosition" onchange="saveSetting('popupPosition', this.value)" style="font-family:var(--font-sans)">
+                    <option value="bottom-right" selected>右下角</option>
+                    <option value="bottom-left">左下角</option>
+                    <option value="top-right">右上角</option>
+                    <option value="cursor">跟随光标</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section full-width" data-od-id="system-privacy">
+          <div class="settings-section-header">
+            <span class="settings-section-title">数据与隐私</span>
+            <span style="font-size:11px;color:var(--success)">仅本地存储</span>
+          </div>
+          <div class="settings-section-body">
+            <div class="config-card">
+              <div class="config-fields">
+                <div>
+                  <span class="config-field-label">翻译历史保留</span>
+                  <select class="config-input" id="historyRetention" onchange="saveSetting('historyRetention', this.value)" style="font-family:var(--font-sans)">
+                    <option value="7">7 天</option>
+                    <option value="30" selected>30 天</option>
+                    <option value="90">90 天</option>
+                    <option value="365">1 年</option>
+                    <option value="0">不保留历史</option>
+                  </select>
+                </div>
+                <div>
+                  <span class="config-field-label">匿名使用统计</span>
+                  <label class="toggle"><input type="checkbox" onchange="saveToggle('telemetry', this.checked)"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+                </div>
+                <div>
+                  <span class="config-field-label">本地缓存</span>
+                  <button class="btn btn-ghost btn-sm" onclick="showInlineToast('翻译缓存已清除（演示）')">清除 2.3 MB 缓存</button>
+                </div>
+              </div>
+              <div class="ai-notice">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                <span>API Key 与偏好设置仅保存在当前设备。本页负责系统偏好；密钥、模型和服务连通性仍在“服务源配置”中处理。</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== VIEW: History ===== -->
+    <div class="view-panel" id="view-history">
+
+      <!-- History Toolbar -->
+      <div class="history-toolbar">
+        <div class="history-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" placeholder="搜索翻译记录…" id="historySearch" oninput="filterHistory()">
+        </div>
+        <select class="history-filter" id="historyLangFilter" onchange="filterHistory()">
+          <option value="all">全部语言</option>
+          <option value="EN→ZH">EN → 中文</option>
+          <option value="ZH→EN">中文 → EN</option>
+          <option value="JA→ZH">JA → 中文</option>
+          <option value="KO→ZH">KO → 中文</option>
+        </select>
+        <select class="history-filter" id="historyProviderFilter" onchange="filterHistory()">
+          <option value="all">全部引擎</option>
+          <option value="DeepSeek AI">DeepSeek AI</option>
+          <option value="Google Cloud">Google Cloud</option>
+          <option value="百度翻译">百度翻译</option>
+          <option value="DeepL">DeepL</option>
+        </select>
+      </div>
+
+      <!-- History List -->
+      <div class="history-list" id="historyList">
+        <div class="history-item" data-lang="EN→ZH" data-provider="DeepSeek AI">
+          <div>
+            <span class="history-lang-badge">EN→ZH</span>
+            <div class="history-provider">DeepSeek AI</div>
+          </div>
+          <div class="history-source">The quick brown fox jumps over the lazy dog. Machine learning has transformed...</div>
+          <div class="history-target">那只敏捷的棕色狐狸跳过了那只懒狗。机器学习已经彻底改变了...</div>
+          <div class="history-meta">
+            <span class="time">14:32</span>
+            <span>287ms · 189 字</span>
+          </div>
+        </div>
+        <div class="history-item" data-lang="JA→ZH" data-provider="Google Cloud">
+          <div>
+            <span class="history-lang-badge">JA→ZH</span>
+            <div class="history-provider">Google Cloud</div>
+          </div>
+          <div class="history-source">人工知能は現代社会において不可欠な技術となっている。特に自然言語処理の分野では...</div>
+          <div class="history-target">人工智能已成为现代社会中不可或缺的技术。特别是在自然语言处理领域...</div>
+          <div class="history-meta">
+            <span class="time">13:18</span>
+            <span>156ms · 342 字</span>
+          </div>
+        </div>
+        <div class="history-item" data-lang="EN→ZH" data-provider="DeepSeek AI">
+          <div>
+            <span class="history-lang-badge">EN→ZH</span>
+            <div class="history-provider">DeepSeek AI</div>
+          </div>
+          <div class="history-source">The conference will cover topics including transformer architectures, attention mechanisms...</div>
+          <div class="history-target">本次会议将涵盖 Transformer 架构、注意力机制等主题...</div>
+          <div class="history-meta">
+            <span class="time">11:05</span>
+            <span>312ms · 256 字</span>
+          </div>
+        </div>
+        <div class="history-item" data-lang="ZH→EN" data-provider="百度翻译">
+          <div>
+            <span class="history-lang-badge">ZH→EN</span>
+            <div class="history-provider">百度翻译</div>
+          </div>
+          <div class="history-source">深度学习模型在图像识别、语音合成和机器翻译等任务上取得了突破性进展...</div>
+          <div class="history-target">Deep learning models have achieved breakthrough progress in tasks such as image recognition...</div>
+          <div class="history-meta">
+            <span class="time">昨天 22:40</span>
+            <span>198ms · 412 字</span>
+          </div>
+        </div>
+        <div class="history-item" data-lang="EN→ZH" data-provider="DeepL">
+          <div>
+            <span class="history-lang-badge">EN→ZH</span>
+            <div class="history-provider">DeepL</div>
+          </div>
+          <div class="history-source">Recent advances in large language models have demonstrated remarkable capabilities in few-shot learning...</div>
+          <div class="history-target">大型语言模型的最新进展展示了在少样本学习方面的卓越能力...</div>
+          <div class="history-meta">
+            <span class="time">昨天 18:15</span>
+            <span>245ms · 298 字</span>
+          </div>
+        </div>
+        <div class="history-item" data-lang="KO→ZH" data-provider="DeepSeek AI">
+          <div>
+            <span class="history-lang-badge">KO→ZH</span>
+            <div class="history-provider">DeepSeek AI</div>
+          </div>
+          <div class="history-source">최근 인공지능 기술의 발전은 우리의 일상생활을 크게 변화시키고 있습니다...</div>
+          <div class="history-target">最近人工智能技术的发展正在极大地改变我们的日常生活...</div>
+          <div class="history-meta">
+            <span class="time">昨天 15:22</span>
+            <span>276ms · 178 字</span>
+          </div>
+        </div>
+        <div class="history-item" data-lang="EN→ZH" data-provider="DeepSeek AI">
+          <div>
+            <span class="history-lang-badge">EN→ZH</span>
+            <div class="history-provider">DeepSeek AI</div>
+          </div>
+          <div class="history-source">Neural machine translation systems have evolved from simple sequence-to-sequence models to complex...</div>
+          <div class="history-target">神经机器翻译系统已从简单的序列到序列模型演变为复杂的...</div>
+          <div class="history-meta">
+            <span class="time">昨天 10:08</span>
+            <span>301ms · 234 字</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pagination -->
+      <div class="history-pagination">
+        <button class="page-btn">‹</button>
+        <button class="page-btn active">1</button>
+        <button class="page-btn">2</button>
+        <button class="page-btn">3</button>
+        <button class="page-btn">›</button>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- ===== Right Aside ===== -->
+  <aside class="aside">
+
+    <!-- Global Toggle -->
+    <div class="aside-card">
+      <div class="aside-card-header">
+        <span class="aside-card-title">全局控制</span>
+      </div>
+      <div class="toggle-wrap" style="margin-bottom:12px">
+        <span class="toggle-label">剪贴板监听</span>
+        <label class="toggle"><input type="checkbox" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+      </div>
+      <div class="toggle-wrap" style="margin-bottom:12px">
+        <span class="toggle-label">网页自动翻译</span>
+        <label class="toggle"><input type="checkbox" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+      </div>
+      <div class="toggle-wrap">
+        <span class="toggle-label">PDF 双语注入</span>
+        <label class="toggle"><input type="checkbox"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+      </div>
+    </div>
+
+    <!-- Active Providers -->
+    <div class="aside-card">
+      <div class="aside-card-header">
+        <span class="aside-card-title">已配置服务源</span>
+        <span class="aside-card-badge">3 个</span>
+      </div>
+      <div class="provider-mini active">
+        <span class="provider-mini-dot ai"></span>
+        <span class="provider-mini-name">DeepSeek AI</span>
+        <span class="provider-mini-status">● 已连接</span>
+      </div>
+      <div class="provider-mini">
+        <span class="provider-mini-dot free"></span>
+        <span class="provider-mini-name">Google Cloud</span>
+        <span class="provider-mini-status">● 已连接</span>
+      </div>
+      <div class="provider-mini">
+        <span class="provider-mini-dot free"></span>
+        <span class="provider-mini-name">百度翻译</span>
+        <span class="provider-mini-status" style="color:var(--muted)">○ 未配置</span>
+      </div>
+      <div class="provider-mini">
+        <span class="provider-mini-dot ai"></span>
+        <span class="provider-mini-name">OpenAI</span>
+        <span class="provider-mini-status" style="color:var(--warning)">⚠ 密钥过期</span>
+      </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="aside-card">
+      <div class="aside-card-header">
+        <span class="aside-card-title">最近翻译</span>
+      </div>
+      <div class="recent-item">
+        <span class="recent-lang">EN→ZH</span>
+        <span class="recent-text">The quick brown fox jumps over the lazy dog...</span>
+        <span class="recent-time">2 分钟前</span>
+      </div>
+      <div class="recent-item">
+        <span class="recent-lang">JA→ZH</span>
+        <span class="recent-text">人工知能は現代社会において不可欠な技術となっている...</span>
+        <span class="recent-time">18 分钟前</span>
+      </div>
+      <div class="recent-item">
+        <span class="recent-lang">EN→ZH</span>
+        <span class="recent-text">Machine learning models require careful evaluation...</span>
+        <span class="recent-time">42 分钟前</span>
+      </div>
+    </div>
+
+  </aside>
+
+</div>
+
+<script src="shared-components.js"></script>
+<script>
+// ===== Theme Toggle =====
+const html = document.documentElement;
+LingFlowComponents.bindThemeToggle({
+  storageKey: 'lingflow-theme',
+  sunId: 'themeIconSun',
+  moonId: 'themeIconMoon'
+});
+
+// ===== View Switching =====
+const navItems = document.querySelectorAll('.nav-item[data-view]');
+const viewTriggers = document.querySelectorAll('[data-view]');
+const viewPanels = document.querySelectorAll('.view-panel');
+
+viewTriggers.forEach(item => {
+  item.addEventListener('click', () => {
+    const view = item.dataset.view;
+    navItems.forEach(n => n.classList.remove('active'));
+    const activeNav = document.querySelector('.nav-item[data-view="' + view + '"]');
+    if (activeNav) activeNav.classList.add('active');
+    viewPanels.forEach(p => p.classList.remove('active'));
+    const targetPanel = document.getElementById('view-' + view);
+    if (targetPanel) targetPanel.classList.add('active');
+  });
+});
+
+function handleThemeMode(value) {
+  localStorage.setItem('lingflow-setting-themeMode', value);
+  if (value === 'system') {
+    LingFlowComponents.setThemeState(window.matchMedia('(prefers-color-scheme: dark)').matches, 'lingflow-theme', { sun: 'themeIconSun', moon: 'themeIconMoon' });
+  } else {
+    LingFlowComponents.setThemeState(value === 'dark', 'lingflow-theme', { sun: 'themeIconSun', moon: 'themeIconMoon' });
+  }
+  showInlineToast('主题模式已更新');
+}
+
+(function loadSystemSettings() {
+  const defaults = {
+    uiLang: 'zh-CN',
+    launchMode: 'service',
+    defaultProvider: 'ai',
+    defaultTargetLang: 'zh-CN',
+    injectStyle: 'block',
+    clipMinChars: '3',
+    uiDensity: 'normal',
+    popupPosition: 'bottom-right',
+    historyRetention: '30',
+    themeMode: localStorage.getItem('lingflow-setting-themeMode') || 'system'
+  };
+  Object.keys(defaults).forEach(key => {
+    const el = document.getElementById(key);
+    if (!el) return;
+    el.value = localStorage.getItem('lingflow-setting-' + key) || defaults[key];
+  });
+
+  const toggleDefaults = {
+    bootStart: '0',
+    minimizeToTray: '1',
+    autoDetectLang: '1',
+    clipboardWatch: '1',
+    autoTranslateClipboard: '0',
+    telemetry: '0'
+  };
+  Object.keys(toggleDefaults).forEach(key => {
+    const savedValue = localStorage.getItem('lingflow-setting-' + key);
+    const checked = savedValue !== null ? savedValue === '1' : toggleDefaults[key] === '1';
+    document.querySelectorAll('[onchange*="' + key + '"]').forEach(input => {
+      input.checked = checked;
+    });
+  });
+})();
+
+// ===== Character Count =====
+const sourceText = document.getElementById('sourceText');
+const charCount = document.getElementById('charCount');
+if (sourceText) {
+  sourceText.addEventListener('input', () => {
+    charCount.textContent = sourceText.value.length + ' 字符';
+  });
+}
+
+// ===== Clear Source =====
+function clearSource() {
+  sourceText.value = '';
+  charCount.textContent = '0 字符';
+}
+
+// ===== Paste from Clipboard =====
+async function pasteClipboard() {
+  try {
+    const text = await navigator.clipboard.readText();
+    sourceText.value = text;
+    charCount.textContent = text.length + ' 字符';
+  } catch {
+    sourceText.placeholder = '无法读取剪贴板，请手动粘贴…';
+  }
+}
+
+// ===== Swap Languages =====
+function swapLanguages() {
+  const src = document.getElementById('sourceLang');
+  const tgt = document.getElementById('targetLang');
+  if (src.value === 'auto') return;
+  const tmp = src.value;
+  src.value = tgt.value;
+  tgt.value = tmp;
+}
+
+// ===== Translate =====
+function doTranslate() {
+  const btn = document.getElementById('translateBtn');
+  const output = document.getElementById('translationOutput');
+  const meta = document.getElementById('translationMeta');
+  const srcLang = document.getElementById('sourceLang');
+  const tgtLang = document.getElementById('targetLang');
+  const provider = document.getElementById('providerSelect');
+
+  const text = sourceText.value.trim();
+  if (!text) {
+    output.innerHTML = '<span class="placeholder">请先输入要翻译的文本</span>';
+    return;
+  }
+
+  output.className = 'translate-output loading';
+  output.innerHTML = '';
+  btn.textContent = '翻译中…';
+  btn.disabled = true;
+  meta.textContent = '正在请求 ' + provider.options[provider.selectedIndex].text + '…';
+
+  const sourceLabel = srcLang.options[srcLang.selectedIndex].text;
+  const targetLabel = tgtLang.options[tgtLang.selectedIndex].text;
+
+  setTimeout(() => {
+    output.className = 'translate-output';
+    output.innerHTML =
+      '<p style="margin-bottom:12px">那只敏捷的棕色狐狸跳过了那只懒狗。机器学习已经彻底改变了我们处理自然语言的方式，使得跨数百种语言对的实时翻译成为可能，且准确度惊人。</p>' +
+      '<p style="font-size:12px;color:var(--muted);margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">' +
+      '<span style="font-family:var(--font-mono)">' + sourceLabel + ' → ' + targetLabel + '</span> · ' +
+      'DeepSeek AI · 延迟 287ms · ' + new Date().toLocaleTimeString('zh-CN') +
+      '</p>';
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2Z"/><path d="M8 12c0-2 .8-3.8 2-5"/><path d="M14 7c1.2 1.2 2 3 2 5"/><path d="M7 14c1 1.5 2.8 2.5 5 2.5s4-1 5-2.5"/></svg>翻译';
+    btn.disabled = false;
+    meta.textContent = '翻译完成 · ' + text.length + ' 字符';
+  }, 1200);
+}
+
+// ===== Copy Translation =====
+async function copyTranslation() {
+  const output = document.getElementById('translationOutput');
+  const text = output.textContent.trim();
+  if (!text || text === '点击「翻译」按钮开始翻译…') return;
+  try {
+    await navigator.clipboard.writeText(text);
+    const meta = document.getElementById('translationMeta');
+    const prev = meta.textContent;
+    meta.textContent = '✓ 已复制到剪贴板';
+    setTimeout(() => { meta.textContent = prev; }, 2000);
+  } catch {}
+}
+
+// ===== Provider Select =====
+const providerSelect = document.getElementById('providerSelect');
+if (providerSelect) {
+  providerSelect.addEventListener('change', function() {
+    const label = this.options[this.selectedIndex].text;
+    document.querySelector('.status-detail').textContent =
+      '剪贴板监听 · 网页自动翻译 · ' + label;
+  });
+}
+
+// ===== Config Password Toggle =====
+function toggleConfigPw(btn) {
+  const input = btn.parentElement.querySelector('input');
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+// ===== Config Test Connection =====
+document.querySelectorAll('.test-config-btn').forEach(btn => {
+  btn.addEventListener('click', function() {
+    const name = this.dataset.name;
+    const card = this.closest('.config-card');
+    const resultEl = card.querySelector('.config-test-result');
+    const origText = this.textContent;
+
+    this.textContent = '测试中…';
+    this.disabled = true;
+
+    setTimeout(() => {
+      const ok = Math.random() > 0.25;
+      resultEl.className = 'config-test-result show ' + (ok ? 'success' : 'error');
+      resultEl.textContent = ok
+        ? '✓ ' + name + ' 连接成功 · 延迟 187ms'
+        : '✗ ' + name + ' 连接失败 · 401 Unauthorized';
+      this.textContent = origText;
+      this.disabled = false;
+
+      if (ok) {
+        this.classList.add('btn-success');
+        setTimeout(() => this.classList.remove('btn-success'), 2000);
+      }
+    }, 700 + Math.random() * 500);
+  });
+});
+
+// ===== History Filter =====
+function filterHistory() {
+  const search = (document.getElementById('historySearch')?.value || '').toLowerCase();
+  const lang = document.getElementById('historyLangFilter')?.value || 'all';
+  const provider = document.getElementById('historyProviderFilter')?.value || 'all';
+
+  document.querySelectorAll('#historyList .history-item').forEach(item => {
+    const itemLang = item.dataset.lang;
+    const itemProvider = item.dataset.provider;
+    const sourceText = item.querySelector('.history-source')?.textContent.toLowerCase() || '';
+    const targetText = item.querySelector('.history-target')?.textContent.toLowerCase() || '';
+
+    const matchSearch = !search || sourceText.includes(search) || targetText.includes(search);
+    const matchLang = lang === 'all' || itemLang === lang;
+    const matchProvider = provider === 'all' || itemProvider === provider;
+
+    item.style.display = (matchSearch && matchLang && matchProvider) ? '' : 'none';
+  });
+}
+</script>
+</body>
+</html>
