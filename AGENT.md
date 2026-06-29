@@ -15,7 +15,7 @@ This file provides strict architectural guidance and code behavior rules for Cod
 We utilize `pnpm workspaces` + `Turborepo`. The project is strictly decoupled into App Layers (`apps/`) and Shared Logic Packages (`packages/`).
 
 ### 1. Key Directory Structure
-- `packages/core/` — Translation Core Engine (Decoupled into `provider`, `cache`, `scheduler`, and `type`). Supports mock, google-free, baidu-free, and AI (OpenAI/DeepSeek) stream translations.
+- `packages/core/` — Translation Core Engine (Decoupled into `provider`, `cache`, `scheduler`, and `type`). Supports official Google, Baidu, DeepL, Microsoft, Youdao, Tencent, and AI (OpenAI-compatible) translations.
   - Entry: `packages/core/src/index.ts`
 - `packages/dom/` — DOM parsing, paragraph extraction, bilingual injection, deduplication, and cleanup algorithms.
   - Entry: `packages/dom/src/index.ts`
