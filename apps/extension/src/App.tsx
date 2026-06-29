@@ -1,87 +1,243 @@
-import { useEffect, useState } from 'react';
-import type { TranslatorProvider } from '@lingflow/core';
+import { useEffect, useMemo, useState } from 'react';
+import type { AiServiceSourceConfig, TranslatorProvider } from '@lingflow/core';
+import {
+  CheckCircle2,
+  Eraser,
+  FileText,
+  GripVertical,
+  Moon,
+  Plus,
+  RadioTower,
+  RefreshCw,
+  Sun,
+  X,
+} from 'lucide-react';
+import { LingFlowLogo } from '@/components/lingflow-logo';
+import { Button, Field, IconButton, Section, SelectField, TextField, Toggle } from '@/components/popup-ui';
+import { cn } from '@/lib/utils';
 import {
   DEFAULT_SETTINGS,
   SETTINGS_STORAGE_KEY,
   type BackgroundMessage,
-  type ContentMessageResponse,
   type ContentMessage,
+  type ContentMessageResponse,
   type LingFlowSettings,
   type ProviderTestMessageResponse,
 } from './shared/messages';
 
+const PROVIDERS: ReadonlyArray<{ id: TranslatorProvider; name: string; tone: 'ai' | 'free' }> = [
+  { id: 'ai', name: 'AI 翻译', tone: 'ai' },
+  { id: 'google-free', name: 'Google Cloud', tone: 'free' },
+  { id: 'baidu-free', name: '百度翻译', tone: 'free' },
+  { id: 'deepl', name: 'DeepL', tone: 'ai' },
+  { id: 'microsoft', name: 'Microsoft Translator', tone: 'free' },
+  { id: 'youdao', name: '有道翻译', tone: 'free' },
+  { id: 'tencent', name: '腾讯云 TMT', tone: 'free' },
+];
+
+const TARGET_LANGUAGES = [
+  { value: 'auto', label: '自动检测' },
+  { value: 'zh-CN', label: '简体中文' },
+  { value: 'en', label: '英语' },
+  { value: 'ja', label: '日语' },
+  { value: 'ko', label: '韩语' },
+  { value: 'fr', label: '法语' },
+  { value: 'de', label: '德语' },
+  { value: 'es', label: '西班牙语' },
+];
+
+type DesktopSettings = Partial<LingFlowSettings>;
+
+interface AiModelCatalog {
+  readonly error?: string;
+  readonly loading: boolean;
+  readonly models: readonly string[];
+}
+
 function App() {
   const [settings, setSettings] = useState<LingFlowSettings>(DEFAULT_SETTINGS);
-  const [status, setStatus] = useState('Ready');
+  const [status, setStatus] = useState('就绪 / 本地代理待检测');
+  const [statusTone, setStatusTone] = useState<'ok' | 'warn'>('ok');
+  const [testResult, setTestResult] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
+  const [testingProxy, setTestingProxy] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
+  const [desktopSettings, setDesktopSettings] = useState<DesktopSettings | null>(null);
+
+  const useLocalProxy = settings.useLocalProxy !== false;
+  const localProxyUrl = settings.localProxyUrl ?? DEFAULT_SETTINGS.localProxyUrl ?? '';
+  const selectedProvider = getProvider(settings.provider);
+  const configuredProviders = useMemo(
+    () => (useLocalProxy ? getConfiguredDesktopProviders(desktopSettings) : PROVIDERS.map((provider) => provider.id)),
+    [desktopSettings, useLocalProxy],
+  );
+  const providerOptions = useMemo(
+    () => PROVIDERS.filter((provider) => configuredProviders.includes(provider.id)),
+    [configuredProviders],
+  );
+  const routeLabel = useLocalProxy ? '本地代理' : selectedProvider.name;
+
+  const statusChip = useMemo(() => {
+    if (!settings.enabled) {
+      return { text: '已暂停', tone: 'warn' as const };
+    }
+    return useLocalProxy ? { text: '自动', tone: 'success' as const } : { text: '直连', tone: 'warn' as const };
+  }, [settings.enabled, useLocalProxy]);
 
   useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+  }, [darkMode]);
+
+  useEffect(() => {
+    if (!useLocalProxy) {
+      setDesktopSettings(null);
+      return;
+    }
+
+    let cancelled = false;
+    fetchDesktopSettings(localProxyUrl)
+      .then((value) => {
+        if (!cancelled) {
+          setDesktopSettings(value);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDesktopSettings(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [localProxyUrl, useLocalProxy]);
+
+  useEffect(() => {
+    if (!useLocalProxy || providerOptions.length === 0) {
+      return;
+    }
+
+    if (!providerOptions.some((provider) => provider.id === settings.provider)) {
+      void updateSettings({ ...settings, provider: providerOptions[0].id }, '已切换到桌面端已配置服务商');
+    }
+  }, [providerOptions, settings, useLocalProxy]);
+
+  useEffect(() => {
+    if (!canUseChromeStorage()) {
+      setStatus('浏览器预览模式');
+      return;
+    }
+
     chrome.storage.local.get(SETTINGS_STORAGE_KEY).then((result) => {
       const stored = result[SETTINGS_STORAGE_KEY] as Partial<LingFlowSettings> | undefined;
       const next = sanitizeSettingsForStorage({ ...DEFAULT_SETTINGS, ...stored });
       setSettings(next);
       chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: next });
+      setStatus(next.enabled ? '就绪 / 本地代理已连接' : '扩展已暂停');
+      setStatusTone(next.enabled ? 'ok' : 'warn');
     });
   }, []);
 
-  async function updateSettings(next: LingFlowSettings) {
+  async function updateSettings(next: LingFlowSettings, nextStatus = '已保存') {
     const sanitized = sanitizeSettingsForStorage(next);
     setSettings(sanitized);
-    await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: sanitized });
-    setStatus('Saved');
+    if (canUseChromeStorage()) {
+      await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: sanitized });
+    }
+    setStatus(nextStatus);
+    setStatusTone(sanitized.enabled ? 'ok' : 'warn');
   }
 
   async function testProviderConnection() {
-    setStatus('Testing provider');
-    const message: BackgroundMessage = {
-      type: 'LF_TEST_PROVIDER',
-      settings,
-    };
+    setTestingProxy(true);
+    setTestResult(null);
+    setStatus(useLocalProxy ? '正在检查本地代理' : '正在测试服务源');
+    setStatusTone('warn');
 
     try {
+      if (!canUseChromeRuntime()) {
+        await wait(500);
+        setTestResult({ tone: 'success', message: '预览模式 / 检查模拟成功' });
+        setStatus('浏览器预览模式 / 本地代理在线');
+        setStatusTone('ok');
+        return;
+      }
+
+      const message: BackgroundMessage = { type: 'LF_TEST_PROVIDER', settings };
       const response = await sendRuntimeMessage<ProviderTestMessageResponse>(message);
       if (!response) {
-        setStatus('No response from LingFlow background worker. Reload the extension and try again.');
+        setTestResult({ tone: 'error', message: '后台服务未响应，请重新加载扩展' });
+        setStatus('后台服务未响应');
+        setStatusTone('warn');
         return;
       }
 
       if (response.ok) {
-        setStatus(`${response.provider} OK in ${response.elapsedMs}ms: ${response.translatedText}`);
+        setTestResult({
+          tone: 'success',
+          message: `${providerName(response.provider)} 在线 / 延迟 ${response.elapsedMs}ms`,
+        });
+        setStatus('就绪 / 服务源可用');
+        setStatusTone('ok');
         return;
       }
 
+      setTestResult({ tone: 'error', message: response.error });
       setStatus(response.error);
+      setStatusTone('warn');
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      const messageText = error instanceof Error ? error.message : String(error);
+      setTestResult({ tone: 'error', message: messageText });
+      setStatus(messageText);
+      setStatusTone('warn');
+    } finally {
+      setTestingProxy(false);
     }
   }
 
-  async function sendToActiveTab(message: ContentMessage, successStatus: string) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) {
-      setStatus('No active tab');
+  async function sendToActiveTab(message: ContentMessage, progressStatus: string, successStatus: string) {
+    if (!settings.enabled) {
+      setStatus('请先启用 LingFlow 翻译');
+      setStatusTone('warn');
       return;
     }
 
-    setStatus('Sending command');
+    if (!canUseChromeTabs()) {
+      setStatus(`预览模式 / ${successStatus}`);
+      setStatusTone('ok');
+      return;
+    }
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) {
+      setStatus('未找到当前标签页');
+      setStatusTone('warn');
+      return;
+    }
+
+    setStatus(progressStatus);
+    setStatusTone('ok');
 
     const response = await sendMessageWithContentScriptFallback(tab.id, message);
     if (!response) {
-      setStatus('No response from page content script. Reload the page and try again.');
+      setStatus('页面脚本未响应，请刷新页面后重试');
+      setStatusTone('warn');
       return;
     }
 
     if (response.ok) {
       setStatus(response.message || successStatus);
+      setStatusTone('ok');
       return;
     }
 
     setStatus(response.error);
+    setStatusTone('warn');
   }
 
   async function sendMessageWithContentScriptFallback(tabId: number, message: ContentMessage) {
     const first = await sendContentMessage(tabId, message);
     if (!first) {
-      return { ok: false, error: 'No response from page content script. Reload the page and try again.' } as const;
+      return { ok: false, error: '页面脚本未响应，请刷新页面后重试' } as const;
     }
 
     if (first.ok || !first.error.includes('Receiving end does not exist')) {
@@ -96,351 +252,616 @@ function App() {
     return sendContentMessage(tabId, message);
   }
 
-  async function sendContentMessage(tabId: number, message: ContentMessage): Promise<ContentMessageResponse> {
-    try {
-      return (
-        (await sendTabMessage<ContentMessageResponse>(tabId, message)) ?? {
-          ok: false,
-          error: 'No response from page content script. Reload the page and try again.',
-        }
-      );
-    } catch (error) {
-      return {
-        ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Cannot talk to this page. Reload the page or try a normal http/https website.',
-      };
-    }
-  }
-
-  async function injectContentScript(tabId: number): Promise<ContentMessageResponse> {
-    const manifest = chrome.runtime.getManifest();
-    const contentScript = manifest.content_scripts?.[0]?.js?.[0];
-    if (!contentScript) {
-      return { ok: false, error: 'Content script entry is missing from the manifest' };
-    }
-
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: [contentScript],
-      });
-      return { ok: true, message: 'Content script injected' };
-    } catch (error) {
-      return {
-        ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Cannot inject LingFlow into this page. Try reloading a normal http/https page.',
-      };
-    }
-  }
-
   return (
-    <main className="w-[360px] bg-background p-5 text-foreground">
-      <section>
-        <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-          LingFlow
-        </p>
-        <h1 className="mt-3 text-2xl font-semibold leading-tight">Reading translator</h1>
-        <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Translate the selected paragraph or a page preview without touching layout.
-        </p>
-        <div className="mt-5 rounded-lg border bg-card p-4 text-card-foreground">
-          <label className="flex items-center justify-between gap-3 text-sm font-medium">
-            Enabled
-            <input
-              type="checkbox"
-              checked={settings.enabled}
-              onChange={(event) =>
-                updateSettings({ ...settings, enabled: event.currentTarget.checked })
-              }
-            />
-          </label>
+    <main className="popup-shell">
+      <header className="popup-header">
+        <LingFlowLogo showWordmark />
+        <IconButton label="切换主题" onClick={() => setDarkMode((value) => !value)}>
+          {darkMode ? <Sun size={14} /> : <Moon size={14} />}
+        </IconButton>
+      </header>
 
-          <label className="mt-4 flex items-center justify-between gap-3 text-sm font-medium">
-            Desktop proxy
-            <input
-              type="checkbox"
-              checked={settings.useLocalProxy ?? true}
-              onChange={(event) =>
-                updateSettings({ ...settings, useLocalProxy: event.currentTarget.checked })
-              }
-            />
-          </label>
+      <div className="popup-content">
+        <Toggle
+          checked={settings.enabled}
+          label="启用 LingFlow 翻译"
+          onChange={(checked) => updateSettings({ ...settings, enabled: checked }, checked ? '扩展已启用' : '扩展已暂停')}
+        />
 
-          {settings.useLocalProxy !== false && (
-            <input
-              className="mt-3 w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-              placeholder="Local proxy URL"
-              value={settings.localProxyUrl ?? DEFAULT_SETTINGS.localProxyUrl}
-              onChange={(event) =>
-                updateSettings({ ...settings, localProxyUrl: event.currentTarget.value })
-              }
-            />
-          )}
-
-          {settings.useLocalProxy !== false && (
-            <p className="mt-3 text-xs leading-5 text-muted-foreground">
-              Provider settings are read from the running LingFlow desktop client.
-            </p>
-          )}
-
-          <label className="mt-4 block text-xs font-medium text-muted-foreground">
-            Provider
-            <select
-              className="mt-1 w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-              value={settings.provider}
-              disabled={settings.useLocalProxy !== false}
-              onChange={(event) =>
-                updateSettings({
-                  ...settings,
-                  provider: event.currentTarget.value as TranslatorProvider,
-                })
-              }
-            >
-              <option value="mock">Mock</option>
-              <option value="google-free">Google Cloud</option>
-              <option value="baidu-free">Baidu Translate</option>
-              <option value="deepl">DeepL</option>
-              <option value="microsoft">Microsoft Translator</option>
-              <option value="youdao">Youdao Translate</option>
-              <option value="tencent">Tencent Cloud TMT</option>
-              <option value="ai">AI</option>
-            </select>
-          </label>
-
-          <label className="mt-3 block text-xs font-medium text-muted-foreground">
-            Target language
-            <input
-              className="mt-1 w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-              value={settings.targetLanguage}
-              onChange={(event) =>
-                updateSettings({ ...settings, targetLanguage: event.currentTarget.value })
-              }
-            />
-          </label>
-
-          {settings.provider === 'google-free' && (
-            <div className={settings.useLocalProxy !== false ? 'hidden' : 'mt-3 space-y-2'}>
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="Google Cloud API key"
-                type="password"
-                value={settings.googleApiKey ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, googleApiKey: event.currentTarget.value })
-                }
-              />
-            </div>
-          )}
-
-          {settings.provider === 'baidu-free' && (
-            <div className={settings.useLocalProxy !== false ? 'hidden' : 'mt-3 space-y-2'}>
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="Baidu APP ID"
-                value={settings.baiduAppId ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, baiduAppId: event.currentTarget.value })
-                }
-              />
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="Baidu secret key"
-                type="password"
-                value={settings.baiduSecretKey ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, baiduSecretKey: event.currentTarget.value })
-                }
-              />
-            </div>
-          )}
-
-          {settings.provider === 'deepl' && (
-            <div className={settings.useLocalProxy !== false ? 'hidden' : 'mt-3 space-y-2'}>
-              <select
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                value={settings.deeplApiType ?? 'free'}
-                onChange={(event) =>
-                  updateSettings({ ...settings, deeplApiType: event.currentTarget.value as 'free' | 'pro' })
-                }
+        <Section title="翻译设置">
+          <div className="grid gap-2">
+            <Field label="桌面端服务路由">
+              <ReadonlyField chip={statusChip.text} chipTone={statusChip.tone} value={routeLabel} />
+            </Field>
+            <Field label="目标语言">
+              <SelectField
+                value={settings.targetLanguage}
+                onChange={(event) => updateSettings({ ...settings, targetLanguage: event.currentTarget.value })}
               >
-                <option value="free">DeepL API Free</option>
-                <option value="pro">DeepL API Pro</option>
-              </select>
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="DeepL API key"
-                type="password"
-                value={settings.deeplApiKey ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, deeplApiKey: event.currentTarget.value })
-                }
-              />
-            </div>
-          )}
-
-          {settings.provider === 'microsoft' && (
-            <div className={settings.useLocalProxy !== false ? 'hidden' : 'mt-3 space-y-2'}>
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="Microsoft Translator API key"
-                type="password"
-                value={settings.microsoftApiKey ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, microsoftApiKey: event.currentTarget.value })
-                }
-              />
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="Region, for example eastasia"
-                value={settings.microsoftRegion ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, microsoftRegion: event.currentTarget.value })
-                }
-              />
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="Endpoint"
-                value={settings.microsoftEndpoint ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, microsoftEndpoint: event.currentTarget.value })
-                }
-              />
-            </div>
-          )}
-
-          {settings.provider === 'youdao' && (
-            <div className={settings.useLocalProxy !== false ? 'hidden' : 'mt-3 space-y-2'}>
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="Youdao app key"
-                value={settings.youdaoAppKey ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, youdaoAppKey: event.currentTarget.value })
-                }
-              />
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="Youdao app secret"
-                type="password"
-                value={settings.youdaoAppSecret ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, youdaoAppSecret: event.currentTarget.value })
-                }
-              />
-            </div>
-          )}
-
-          {settings.provider === 'tencent' && (
-            <div className={settings.useLocalProxy !== false ? 'hidden' : 'mt-3 space-y-2'}>
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="Tencent SecretId"
-                value={settings.tencentSecretId ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, tencentSecretId: event.currentTarget.value })
-                }
-              />
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="Tencent SecretKey"
-                type="password"
-                value={settings.tencentSecretKey ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, tencentSecretKey: event.currentTarget.value })
-                }
-              />
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="Region"
-                value={settings.tencentRegion ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, tencentRegion: event.currentTarget.value })
-                }
-              />
-            </div>
-          )}
-
-          {settings.provider === 'ai' && (
-            <div className={settings.useLocalProxy !== false ? 'hidden' : 'mt-3 space-y-2'}>
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="AI base URL"
-                value={settings.aiBaseUrl ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, aiBaseUrl: event.currentTarget.value })
-                }
-              />
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="AI model"
-                value={settings.aiModel ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, aiModel: event.currentTarget.value })
-                }
-              />
-              <input
-                className="w-full rounded-md border bg-background px-2 py-2 text-sm text-foreground"
-                placeholder="API key"
-                type="password"
-                value={settings.aiApiKey ?? ''}
-                onChange={(event) =>
-                  updateSettings({ ...settings, aiApiKey: event.currentTarget.value })
-                }
-              />
-            </div>
-          )}
-
-          {settings.provider !== 'mock' && (
-            <p className="mt-3 text-xs leading-5 text-muted-foreground">
-              Real providers send text to the selected translation service.
-            </p>
-          )}
-
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <button
-              className="col-span-2 rounded-md border px-3 py-2 text-sm font-medium"
-              type="button"
-              onClick={testProviderConnection}
-            >
-              Test provider connection
-            </button>
-            <button
-              className="rounded-md border px-3 py-2 text-sm font-medium"
-              type="button"
-              onClick={() => sendToActiveTab({ type: 'LF_TRANSLATE_SELECTION' }, 'Selection sent')}
-            >
-              Selection
-            </button>
-            <button
-              className="rounded-md border px-3 py-2 text-sm font-medium"
-              type="button"
-              onClick={() => sendToActiveTab({ type: 'LF_TRANSLATE_PAGE' }, 'Page preview sent')}
-            >
-              Page
-            </button>
-            <button
-              className="col-span-2 rounded-md border px-3 py-2 text-sm font-medium"
-              type="button"
-              onClick={() => sendToActiveTab({ type: 'LF_CLEANUP' }, 'Cleaned')}
-            >
-              Clear page translations
-            </button>
+                {TARGET_LANGUAGES.map((language) => (
+                  <option key={language.value} value={language.value}>
+                    {language.label}
+                  </option>
+                ))}
+              </SelectField>
+            </Field>
+            <Field label="翻译服务商">
+              <SelectField
+                disabled={useLocalProxy && providerOptions.length === 0}
+                value={useLocalProxy && providerOptions.length === 0 ? '' : settings.provider}
+                onChange={(event) => updateSettings({ ...settings, provider: event.currentTarget.value as TranslatorProvider })}
+              >
+                {useLocalProxy && providerOptions.length === 0 ? <option value="">未检测到已配置服务商</option> : null}
+                {(useLocalProxy ? providerOptions : PROVIDERS).map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </SelectField>
+            </Field>
           </div>
+        </Section>
 
-          <p className="mt-3 text-xs leading-5 text-muted-foreground">{status}</p>
+        <Section title="本地代理">
+          <div className="provider-card">
+            <div className="provider-card-header">
+              <span className="provider-card-name">
+                <span className={cn('provider-dot', selectedProvider.tone)} />
+                桌面端代理
+              </span>
+              <span className={cn('status-chip', statusChip.tone === 'warn' && 'warn')}>{settings.enabled ? '可用' : '暂停'}</span>
+            </div>
+
+            <div className="proxy-note">
+              <RadioTower size={14} />
+              <span>扩展默认通过本地代理调用桌面端服务源，凭据、模型和端点统一在桌面端“服务源配置”中管理。</span>
+            </div>
+
+            <div className="config-fields">
+              <Field label="代理地址">
+                <TextField
+                  disabled={!useLocalProxy}
+                  onChange={(event) => updateSettings({ ...settings, localProxyUrl: event.currentTarget.value })}
+                  placeholder="http://127.0.0.1:47631"
+                  value={settings.localProxyUrl ?? DEFAULT_SETTINGS.localProxyUrl}
+                />
+              </Field>
+              <InfoLine label="当前服务源" value={providerOptions.length ? selectedProvider.name : '未检测到已配置服务商'} />
+            </div>
+
+            <Button block disabled={testingProxy} onClick={testProviderConnection}>
+              {testingProxy ? <RefreshCw className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}
+              {useLocalProxy ? '检查本地代理' : '测试直连服务源'}
+            </Button>
+
+            {testResult ? <div className={cn('test-result show', testResult.tone)}>{testResult.message}</div> : null}
+          </div>
+        </Section>
+
+        <AdvancedProviderSettings settings={settings} updateSettings={updateSettings} useLocalProxy={useLocalProxy} />
+
+        <div className="action-grid">
+          <Button
+            className="col-span-2"
+            onClick={() => sendToActiveTab({ type: 'LF_TRANSLATE_PAGE' }, '正在翻译当前页面', '整页翻译已发送')}
+            variant="primary"
+          >
+            <FileText size={14} />
+            整页翻译
+          </Button>
+          <Button
+            className="col-span-2"
+            onClick={() => sendToActiveTab({ type: 'LF_CLEANUP' }, '正在清除页面翻译', '已清除页面翻译')}
+          >
+            <Eraser size={14} />
+            清除页面翻译
+          </Button>
         </div>
-      </section>
+      </div>
+
+      <footer className="status-bar">
+        <span className={cn('status-dot', statusTone)} />
+        <span className="truncate">{status}</span>
+      </footer>
     </main>
   );
 }
 
 export default App;
+
+function ReadonlyField({
+  chip,
+  chipTone,
+  value,
+}: {
+  readonly chip: string;
+  readonly chipTone: 'success' | 'warn';
+  readonly value: string;
+}) {
+  return (
+    <div className="readonly-field">
+      <span className="truncate">{value}</span>
+      <span className={cn('status-chip', chipTone === 'warn' && 'warn')}>{chip}</span>
+    </div>
+  );
+}
+
+function InfoLine({ label, mono, value }: { readonly label: string; readonly mono?: boolean; readonly value: string }) {
+  return (
+    <div>
+      <span className="config-field-label">{label}</span>
+      <span className={cn('config-value', mono && 'mono')}>{value}</span>
+    </div>
+  );
+}
+
+function AdvancedProviderSettings({
+  settings,
+  updateSettings,
+  useLocalProxy,
+}: {
+  readonly settings: LingFlowSettings;
+  readonly updateSettings: (settings: LingFlowSettings, status?: string) => Promise<void>;
+  readonly useLocalProxy: boolean;
+}) {
+  return (
+    <details className="advanced-card" open={!useLocalProxy}>
+      <summary>
+        <span>高级直连配置</span>
+        <span className="text-[11px] text-[var(--muted)]">{useLocalProxy ? '默认跟随桌面端' : '正在使用直连'}</span>
+      </summary>
+      <div className="mt-3 grid gap-3">
+        <Toggle
+          checked={useLocalProxy}
+          label="跟随桌面端代理"
+          onChange={(checked) =>
+            updateSettings({ ...settings, useLocalProxy: checked }, checked ? '已切换为桌面端代理' : '已切换为扩展直连')
+          }
+        />
+        <Field label="本地代理地址">
+          <TextField
+            disabled={!useLocalProxy}
+            onChange={(event) => updateSettings({ ...settings, localProxyUrl: event.currentTarget.value })}
+            value={settings.localProxyUrl ?? DEFAULT_SETTINGS.localProxyUrl}
+          />
+        </Field>
+        <Field label="直连服务源">
+          <SelectField
+            disabled={useLocalProxy}
+            value={settings.provider}
+            onChange={(event) => updateSettings({ ...settings, provider: event.currentTarget.value as TranslatorProvider })}
+          >
+            {PROVIDERS.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name}
+              </option>
+            ))}
+          </SelectField>
+        </Field>
+        {!useLocalProxy ? <DirectProviderFields settings={settings} updateSettings={updateSettings} /> : null}
+      </div>
+    </details>
+  );
+}
+
+function DirectProviderFields({
+  settings,
+  updateSettings,
+}: {
+  readonly settings: LingFlowSettings;
+  readonly updateSettings: (settings: LingFlowSettings, status?: string) => Promise<void>;
+}) {
+  if (settings.provider === 'google-free') {
+    return (
+      <Field label="Google Cloud API Key">
+        <TextField
+          onChange={(event) => updateSettings({ ...settings, googleApiKey: event.currentTarget.value })}
+          type="password"
+          value={settings.googleApiKey ?? ''}
+        />
+      </Field>
+    );
+  }
+
+  if (settings.provider === 'baidu-free') {
+    return (
+      <>
+        <Field label="Baidu APP ID">
+          <TextField
+            onChange={(event) => updateSettings({ ...settings, baiduAppId: event.currentTarget.value })}
+            value={settings.baiduAppId ?? ''}
+          />
+        </Field>
+        <Field label="Baidu Secret Key">
+          <TextField
+            onChange={(event) => updateSettings({ ...settings, baiduSecretKey: event.currentTarget.value })}
+            type="password"
+            value={settings.baiduSecretKey ?? ''}
+          />
+        </Field>
+      </>
+    );
+  }
+
+  if (settings.provider === 'deepl') {
+    return (
+      <>
+        <Field label="DeepL API 类型">
+          <SelectField
+            value={settings.deeplApiType ?? 'free'}
+            onChange={(event) => updateSettings({ ...settings, deeplApiType: event.currentTarget.value as 'free' | 'pro' })}
+          >
+            <option value="free">DeepL API Free</option>
+            <option value="pro">DeepL API Pro</option>
+          </SelectField>
+        </Field>
+        <Field label="DeepL API Key">
+          <TextField
+            onChange={(event) => updateSettings({ ...settings, deeplApiKey: event.currentTarget.value })}
+            type="password"
+            value={settings.deeplApiKey ?? ''}
+          />
+        </Field>
+      </>
+    );
+  }
+
+  if (settings.provider === 'microsoft') {
+    return (
+      <>
+        <Field label="Microsoft API Key">
+          <TextField
+            onChange={(event) => updateSettings({ ...settings, microsoftApiKey: event.currentTarget.value })}
+            type="password"
+            value={settings.microsoftApiKey ?? ''}
+          />
+        </Field>
+        <Field label="Region">
+          <TextField
+            onChange={(event) => updateSettings({ ...settings, microsoftRegion: event.currentTarget.value })}
+            placeholder="eastasia"
+            value={settings.microsoftRegion ?? ''}
+          />
+        </Field>
+        <Field label="Endpoint">
+          <TextField
+            onChange={(event) => updateSettings({ ...settings, microsoftEndpoint: event.currentTarget.value })}
+            value={settings.microsoftEndpoint ?? ''}
+          />
+        </Field>
+      </>
+    );
+  }
+
+  if (settings.provider === 'youdao') {
+    return (
+      <>
+        <Field label="有道 App Key">
+          <TextField
+            onChange={(event) => updateSettings({ ...settings, youdaoAppKey: event.currentTarget.value })}
+            value={settings.youdaoAppKey ?? ''}
+          />
+        </Field>
+        <Field label="有道 App Secret">
+          <TextField
+            onChange={(event) => updateSettings({ ...settings, youdaoAppSecret: event.currentTarget.value })}
+            type="password"
+            value={settings.youdaoAppSecret ?? ''}
+          />
+        </Field>
+      </>
+    );
+  }
+
+  if (settings.provider === 'tencent') {
+    return (
+      <>
+        <Field label="Tencent SecretId">
+          <TextField
+            onChange={(event) => updateSettings({ ...settings, tencentSecretId: event.currentTarget.value })}
+            value={settings.tencentSecretId ?? ''}
+          />
+        </Field>
+        <Field label="Tencent SecretKey">
+          <TextField
+            onChange={(event) => updateSettings({ ...settings, tencentSecretKey: event.currentTarget.value })}
+            type="password"
+            value={settings.tencentSecretKey ?? ''}
+          />
+        </Field>
+        <Field label="Region">
+          <TextField
+            onChange={(event) => updateSettings({ ...settings, tencentRegion: event.currentTarget.value })}
+            value={settings.tencentRegion ?? ''}
+          />
+        </Field>
+      </>
+    );
+  }
+
+  return <DirectAiSources settings={settings} updateSettings={updateSettings} />;
+}
+
+function DirectAiSources({
+  settings,
+  updateSettings,
+}: {
+  readonly settings: LingFlowSettings;
+  readonly updateSettings: (settings: LingFlowSettings, status?: string) => Promise<void>;
+}) {
+  const sources = settings.aiSources?.length ? settings.aiSources : DEFAULT_SETTINGS.aiSources ?? [];
+  const [modelCatalogs, setModelCatalogs] = useState<Record<string, AiModelCatalog>>({});
+
+  function updateSource(sourceId: string, patch: Partial<AiServiceSourceConfig>) {
+    return updateSettings({
+      ...settings,
+      aiSources: sources.map((source) => (source.id === sourceId ? { ...source, ...patch } : source)),
+    });
+  }
+
+  function addSource() {
+    const source: AiServiceSourceConfig = {
+      id: `ai-source-${Date.now()}`,
+      name: 'AI Service',
+      baseUrl: '',
+      apiKey: '',
+      models: [],
+      enabled: true,
+    };
+    return updateSettings({ ...settings, aiSources: [...sources, source] });
+  }
+
+  function removeSource(sourceId: string) {
+    const nextSources = sources.filter((source) => source.id !== sourceId);
+    return updateSettings({ ...settings, aiSources: nextSources.length ? nextSources : DEFAULT_SETTINGS.aiSources });
+  }
+
+  function moveSource(fromId: string, toId: string) {
+    const fromIndex = sources.findIndex((source) => source.id === fromId);
+    const toIndex = sources.findIndex((source) => source.id === toId);
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+      return;
+    }
+
+    const nextSources = [...sources];
+    const [moved] = nextSources.splice(fromIndex, 1);
+    nextSources.splice(toIndex, 0, moved);
+    void updateSettings({ ...settings, aiSources: nextSources });
+  }
+
+  async function fetchModels(source: AiServiceSourceConfig) {
+    if (!source.baseUrl.trim() || !source.apiKey.trim()) {
+      setModelCatalogs((catalogs) => ({
+        ...catalogs,
+        [source.id]: { loading: false, models: catalogs[source.id]?.models ?? [], error: '请先填写 Base URL 和 API Key' },
+      }));
+      return;
+    }
+
+    setModelCatalogs((catalogs) => ({
+      ...catalogs,
+      [source.id]: { loading: true, models: catalogs[source.id]?.models ?? [], error: undefined },
+    }));
+
+    try {
+      const models = await fetchAiModels(source);
+      setModelCatalogs((catalogs) => ({
+        ...catalogs,
+        [source.id]: { loading: false, models, error: models.length ? undefined : '接口未返回可用模型' },
+      }));
+      if (models.length > 0 && source.models.length === 0) {
+        void updateSource(source.id, { models: [models[0]] });
+      }
+    } catch (error) {
+      setModelCatalogs((catalogs) => ({
+        ...catalogs,
+        [source.id]: {
+          loading: false,
+          models: catalogs[source.id]?.models ?? [],
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
+  }
+
+  function addModel(source: AiServiceSourceConfig, model: string) {
+    if (!model || source.models.includes(model)) {
+      return;
+    }
+    void updateSource(source.id, { models: [...source.models, model] });
+  }
+
+  return (
+    <div className="direct-ai-sources">
+      <Toggle
+        checked={settings.aiFallbackEnabled !== false}
+        label="AI 服务源与模型自动回退"
+        onChange={(checked) => updateSettings({ ...settings, aiFallbackEnabled: checked })}
+      />
+      <Button onClick={addSource}>
+        <Plus size={14} />
+        添加 AI 服务源
+      </Button>
+      {sources.map((source) => (
+        <article
+          className="direct-ai-card"
+          draggable
+          key={source.id}
+          onDragOver={(event) => event.preventDefault()}
+          onDragStart={(event) => event.dataTransfer.setData('text/plain', source.id)}
+          onDrop={(event) => {
+            event.preventDefault();
+            moveSource(event.dataTransfer.getData('text/plain'), source.id);
+          }}
+        >
+          <div className="direct-ai-card-header">
+            <GripVertical size={15} />
+            <TextField
+              aria-label="AI 服务源名称"
+              onChange={(event) => updateSource(source.id, { name: event.currentTarget.value })}
+              value={source.name}
+            />
+            <IconButton label="删除服务源" onClick={() => removeSource(source.id)}>
+              <X size={14} />
+            </IconButton>
+          </div>
+          <Field label="Base URL">
+            <TextField
+              onChange={(event) => updateSource(source.id, { baseUrl: event.currentTarget.value })}
+              placeholder="https://api.openai.com"
+              value={source.baseUrl}
+            />
+          </Field>
+          <Field label="API Key">
+            <TextField
+              onChange={(event) => updateSource(source.id, { apiKey: event.currentTarget.value })}
+              type="password"
+              value={source.apiKey}
+            />
+          </Field>
+          <Field label="模型">
+            <div className="direct-ai-model-select">
+              <SelectField
+                disabled={!modelCatalogs[source.id]?.models.length}
+                onChange={(event) => {
+                  addModel(source, event.currentTarget.value);
+                  event.currentTarget.value = '';
+                }}
+                value=""
+              >
+                <option value="">选择模型</option>
+                {(modelCatalogs[source.id]?.models ?? []).map((model) => (
+                  <option disabled={source.models.includes(model)} key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </SelectField>
+              <Button
+                disabled={!source.baseUrl.trim() || !source.apiKey.trim() || modelCatalogs[source.id]?.loading}
+                onClick={() => void fetchModels(source)}
+              >
+                {modelCatalogs[source.id]?.loading ? <RefreshCw className="animate-spin" size={13} /> : <RefreshCw size={13} />}
+                获取模型
+              </Button>
+            </div>
+            {modelCatalogs[source.id]?.error ? (
+              <span className="text-[11px] leading-5 text-[var(--danger)]">{modelCatalogs[source.id]?.error}</span>
+            ) : null}
+          </Field>
+          <div className="direct-ai-models">
+            {source.models.map((model) => (
+              <button
+                className="direct-ai-model-chip"
+                key={model}
+                onClick={() => updateSource(source.id, { models: source.models.filter((item) => item !== model) })}
+                type="button"
+              >
+                <span>{model}</span>
+                <X size={11} />
+              </button>
+            ))}
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function getProvider(provider: TranslatorProvider) {
+  return PROVIDERS.find((item) => item.id === provider) ?? PROVIDERS[0];
+}
+
+function providerName(provider: TranslatorProvider) {
+  return getProvider(provider).name;
+}
+
+async function fetchDesktopSettings(proxyUrl: string): Promise<DesktopSettings> {
+  const response = await fetch(`${normalizeLocalProxyUrl(proxyUrl)}/settings`);
+  if (!response.ok) {
+    throw new Error(`LingFlow desktop proxy settings failed with HTTP ${response.status}`);
+  }
+
+  return (await response.json()) as DesktopSettings;
+}
+
+function getConfiguredDesktopProviders(settings: DesktopSettings | null): readonly TranslatorProvider[] {
+  if (!settings) {
+    return [];
+  }
+
+  const providers: TranslatorProvider[] = [];
+  if (settings.aiSources?.some((source) => source.enabled !== false && source.baseUrl?.trim() && source.apiKey?.trim() && source.models?.length)) {
+    providers.push('ai');
+  }
+  if (settings.googleApiKey?.trim()) {
+    providers.push('google-free');
+  }
+  if (settings.baiduAppId?.trim() && settings.baiduSecretKey?.trim()) {
+    providers.push('baidu-free');
+  }
+  if (settings.deeplApiKey?.trim()) {
+    providers.push('deepl');
+  }
+  if (settings.microsoftApiKey?.trim()) {
+    providers.push('microsoft');
+  }
+  if (settings.youdaoAppKey?.trim() && settings.youdaoAppSecret?.trim()) {
+    providers.push('youdao');
+  }
+  if (settings.tencentSecretId?.trim() && settings.tencentSecretKey?.trim()) {
+    providers.push('tencent');
+  }
+
+  return providers;
+}
+
+function normalizeLocalProxyUrl(proxyUrl?: string) {
+  return (proxyUrl || DEFAULT_SETTINGS.localProxyUrl || 'http://127.0.0.1:47631').replace(/\/+$/, '');
+}
+
+async function fetchAiModels(source: AiServiceSourceConfig) {
+  const url = new URL('/v1/models', normalizeBaseUrl(source.baseUrl.trim()));
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      authorization: `Bearer ${source.apiKey.trim()}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`获取模型失败：HTTP ${response.status}`);
+  }
+
+  const payload = (await response.json()) as { readonly data?: readonly { readonly id?: string }[] };
+  return Array.from(
+    new Set(
+      (payload.data ?? [])
+        .map((model) => model.id?.trim())
+        .filter((model): model is string => Boolean(model)),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
+}
+
+function normalizeBaseUrl(baseUrl: string) {
+  return baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function canUseChromeStorage() {
+  return typeof chrome !== 'undefined' && Boolean(chrome.storage?.local);
+}
+
+function canUseChromeRuntime() {
+  return typeof chrome !== 'undefined' && Boolean(chrome.runtime?.sendMessage);
+}
+
+function canUseChromeTabs() {
+  const tabsApi = typeof chrome !== 'undefined' ? chrome.tabs : undefined;
+  return Boolean(tabsApi?.query && tabsApi?.sendMessage);
+}
 
 function sendRuntimeMessage<TResponse>(message: BackgroundMessage): Promise<TResponse | undefined> {
   return new Promise((resolve, reject) => {
@@ -450,7 +871,6 @@ function sendRuntimeMessage<TResponse>(message: BackgroundMessage): Promise<TRes
         reject(new Error(error.message));
         return;
       }
-
       resolve(response);
     });
   });
@@ -464,10 +884,46 @@ function sendTabMessage<TResponse>(tabId: number, message: ContentMessage): Prom
         reject(new Error(error.message));
         return;
       }
-
       resolve(response);
     });
   });
+}
+
+async function sendContentMessage(tabId: number, message: ContentMessage): Promise<ContentMessageResponse> {
+  try {
+    return (
+      (await sendTabMessage<ContentMessageResponse>(tabId, message)) ?? {
+        ok: false,
+        error: '页面脚本未响应，请刷新页面后重试',
+      }
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : '无法连接当前页面，请尝试普通 http/https 页面',
+    };
+  }
+}
+
+async function injectContentScript(tabId: number): Promise<ContentMessageResponse> {
+  const manifest = chrome.runtime.getManifest();
+  const contentScript = manifest.content_scripts?.[0]?.js?.[0];
+  if (!contentScript) {
+    return { ok: false, error: 'manifest 缺少 content script 入口' };
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: [contentScript],
+    });
+    return { ok: true, message: '页面脚本已注入' };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : '无法注入 LingFlow，请刷新普通 http/https 页面后重试',
+    };
+  }
 }
 
 function sanitizeSettingsForStorage(settings: LingFlowSettings): LingFlowSettings {
@@ -479,7 +935,7 @@ function sanitizeSettingsForStorage(settings: LingFlowSettings): LingFlowSetting
     enabled: settings.enabled,
     useLocalProxy: true,
     localProxyUrl: settings.localProxyUrl,
-    provider: DEFAULT_SETTINGS.provider,
+    provider: settings.provider,
     targetLanguage: settings.targetLanguage,
     sourceLanguage: settings.sourceLanguage,
   };

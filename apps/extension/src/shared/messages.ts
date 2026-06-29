@@ -1,4 +1,4 @@
-import type { TranslationResponse, TranslatorProvider } from '@lingflow/core';
+import type { AiServiceSourceConfig, TranslationResponse, TranslatorProvider } from '@lingflow/core';
 
 export interface LingFlowSettings {
   readonly enabled: boolean;
@@ -7,6 +7,8 @@ export interface LingFlowSettings {
   readonly provider: TranslatorProvider;
   readonly targetLanguage: string;
   readonly sourceLanguage?: string;
+  readonly aiFallbackEnabled?: boolean;
+  readonly aiSources?: readonly AiServiceSourceConfig[];
   readonly aiBaseUrl?: string;
   readonly aiApiKey?: string;
   readonly aiModel?: string;
@@ -27,7 +29,6 @@ export interface LingFlowSettings {
 
 export type ContentMessage =
   | { readonly type: 'LF_PING' }
-  | { readonly type: 'LF_TRANSLATE_SELECTION' }
   | { readonly type: 'LF_TRANSLATE_PAGE' }
   | { readonly type: 'LF_CLEANUP' };
 
@@ -63,8 +64,19 @@ export const DEFAULT_SETTINGS: LingFlowSettings = {
   enabled: true,
   useLocalProxy: true,
   localProxyUrl: 'http://127.0.0.1:47631',
-  provider: 'mock',
+  provider: 'baidu-free',
   targetLanguage: 'zh-CN',
+  aiFallbackEnabled: true,
+  aiSources: [
+    {
+      id: 'openai-default',
+      name: 'OpenAI Compatible',
+      baseUrl: 'https://api.openai.com',
+      apiKey: '',
+      models: ['gpt-4.1-mini'],
+      enabled: true,
+    },
+  ],
   aiBaseUrl: 'https://api.openai.com',
   aiModel: 'gpt-4.1-mini',
   deeplApiType: 'free',

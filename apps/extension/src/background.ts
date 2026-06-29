@@ -8,22 +8,6 @@ import {
   type TranslationMessageResponse,
 } from './shared/messages';
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: 'lingflow-translate-selection',
-    title: 'Translate selection with LingFlow',
-    contexts: ['selection'],
-  });
-});
-
-chrome.contextMenus.onClicked.addListener((info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab) => {
-  if (info.menuItemId !== 'lingflow-translate-selection' || !tab?.id) {
-    return;
-  }
-
-  chrome.tabs.sendMessage(tab.id, { type: 'LF_TRANSLATE_SELECTION' });
-});
-
 chrome.runtime.onMessage.addListener(
   (
     message: BackgroundMessage,
@@ -61,9 +45,9 @@ async function translateTextWithResolvedSettings(
 ) {
   if (
     effectiveSettings.provider === 'ai' &&
-    (!effectiveSettings.aiApiKey || !effectiveSettings.aiBaseUrl || !effectiveSettings.aiModel)
+    !hasConfiguredAiProvider(effectiveSettings)
   ) {
-    throw new Error('AI provider requires base URL, model, and API key');
+    throw new Error('AI provider requires at least one enabled source with base URL, model, and API key');
   }
 
   if (effectiveSettings.provider === 'google-free' && !effectiveSettings.googleApiKey) {
@@ -91,17 +75,20 @@ async function translateTextWithResolvedSettings(
   }
 
   const options: TranslationSchedulerOptions =
-    effectiveSettings.provider === 'ai' &&
-    effectiveSettings.aiApiKey &&
-    effectiveSettings.aiBaseUrl &&
-    effectiveSettings.aiModel
+    effectiveSettings.provider === 'ai' && hasConfiguredAiProvider(effectiveSettings)
       ? {
           defaultProvider: effectiveSettings.provider,
-          ai: {
-            apiKey: effectiveSettings.aiApiKey,
-            baseUrl: effectiveSettings.aiBaseUrl,
-            model: effectiveSettings.aiModel,
-          },
+          ai: effectiveSettings.aiSources?.length
+            ? {
+                sources: effectiveSettings.aiSources,
+                fallbackEnabled: effectiveSettings.aiFallbackEnabled,
+              }
+            : {
+                apiKey: effectiveSettings.aiApiKey,
+                baseUrl: effectiveSettings.aiBaseUrl,
+                model: effectiveSettings.aiModel,
+                fallbackEnabled: effectiveSettings.aiFallbackEnabled,
+              },
         }
       : {
           defaultProvider: effectiveSettings.provider,
@@ -147,7 +134,7 @@ async function translateTextWithResolvedSettings(
   return scheduler.translate({
     text,
     sourceLanguage: effectiveSettings.sourceLanguage,
-    targetLanguage: effectiveSettings.targetLanguage,
+    targetLanguage: normalizeTargetLanguage(effectiveSettings.targetLanguage),
     provider: effectiveSettings.provider,
   });
 }
@@ -157,17 +144,17 @@ async function testProvider(settings: LingFlowSettings): Promise<ProviderTestMes
   const effectiveSettings = await resolveTranslationSettings({
     ...settings,
     sourceLanguage: 'en',
-    targetLanguage: settings.targetLanguage || 'zh-CN',
+    targetLanguage: normalizeTargetLanguage(settings.targetLanguage),
   });
   const requestSettings = {
     ...settings,
     sourceLanguage: 'en',
-    targetLanguage: effectiveSettings.targetLanguage || 'zh-CN',
+    targetLanguage: normalizeTargetLanguage(effectiveSettings.targetLanguage),
   };
   const response = await translateTextWithResolvedSettings('Hello, LingFlow.', requestSettings, {
     ...effectiveSettings,
     sourceLanguage: 'en',
-    targetLanguage: effectiveSettings.targetLanguage || 'zh-CN',
+    targetLanguage: normalizeTargetLanguage(effectiveSettings.targetLanguage),
   });
 
   return {
@@ -230,6 +217,22 @@ function normalizeError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function hasConfiguredAiProvider(settings: LingFlowSettings) {
+  if (
+    settings.aiSources?.some(
+      (source) =>
+        source.enabled !== false &&
+        source.baseUrl.trim() &&
+        source.apiKey.trim() &&
+        source.models.some((model) => model.trim()),
+    )
+  ) {
+    return true;
+  }
+
+  return Boolean(settings.aiApiKey?.trim() && settings.aiBaseUrl?.trim() && settings.aiModel?.trim());
+}
+
 async function resolveTranslationSettings(settings: LingFlowSettings): Promise<LingFlowSettings> {
   if (settings.useLocalProxy === false) {
     return settings;
@@ -240,13 +243,24 @@ async function resolveTranslationSettings(settings: LingFlowSettings): Promise<L
     throw new Error(`LingFlow desktop proxy settings failed with HTTP ${response.status}: ${await response.text()}`);
   }
 
+  const desktopSettings = (await response.json()) as Partial<LingFlowSettings>;
+  const targetLanguage =
+    settings.targetLanguage === 'auto'
+      ? desktopSettings.targetLanguage || DEFAULT_SETTINGS.targetLanguage
+      : settings.targetLanguage || desktopSettings.targetLanguage || DEFAULT_SETTINGS.targetLanguage;
+
   return {
     ...DEFAULT_SETTINGS,
+    ...desktopSettings,
     ...settings,
-    ...((await response.json()) as Partial<LingFlowSettings>),
+    targetLanguage,
     useLocalProxy: true,
     localProxyUrl: settings.localProxyUrl ?? DEFAULT_SETTINGS.localProxyUrl,
   };
+}
+
+function normalizeTargetLanguage(language?: string) {
+  return language && language !== 'auto' ? language : DEFAULT_SETTINGS.targetLanguage;
 }
 
 function createLocalProxyHttpClient(proxyUrl: string): ProviderHttpClient {
