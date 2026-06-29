@@ -3,7 +3,6 @@ export { BaiduFreeTranslatorProvider } from './providers/baidu-free.js';
 export { DeepLTranslatorProvider } from './providers/deepl.js';
 export { GoogleFreeTranslatorProvider } from './providers/google-free.js';
 export { MicrosoftTranslatorProvider } from './providers/microsoft.js';
-export { MockTranslatorProvider } from './providers/mock.js';
 export { OpenAiCompatibleTranslatorProvider } from './providers/openai-compatible.js';
 export { TencentTranslatorProvider } from './providers/tencent.js';
 export { YoudaoTranslatorProvider } from './providers/youdao.js';
@@ -11,6 +10,7 @@ export { TranslationScheduler } from './scheduler/translation-scheduler.js';
 export { createTranslationError, isTranslationError } from './types.js';
 export type {
   AiProviderConfig,
+  AiServiceSourceConfig,
   BaiduProviderConfig,
   DeepLProviderConfig,
   GoogleProviderConfig,

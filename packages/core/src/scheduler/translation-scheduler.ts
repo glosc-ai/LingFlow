@@ -3,7 +3,6 @@ import { BaiduFreeTranslatorProvider } from '../providers/baidu-free.js';
 import { DeepLTranslatorProvider } from '../providers/deepl.js';
 import { GoogleFreeTranslatorProvider } from '../providers/google-free.js';
 import { MicrosoftTranslatorProvider } from '../providers/microsoft.js';
-import { MockTranslatorProvider } from '../providers/mock.js';
 import { OpenAiCompatibleTranslatorProvider } from '../providers/openai-compatible.js';
 import { TencentTranslatorProvider } from '../providers/tencent.js';
 import { YoudaoTranslatorProvider } from '../providers/youdao.js';
@@ -33,7 +32,6 @@ export class TranslationScheduler {
       new MicrosoftTranslatorProvider(options.microsoft, options.httpClient),
       new YoudaoTranslatorProvider(options.youdao, options.httpClient),
       new TencentTranslatorProvider(options.tencent, options.httpClient),
-      new MockTranslatorProvider(),
     ];
 
     if (options.ai) {

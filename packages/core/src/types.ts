@@ -5,13 +5,23 @@ export type TranslatorProvider =
   | 'microsoft'
   | 'youdao'
   | 'tencent'
-  | 'ai'
-  | 'mock';
+  | 'ai';
 
-export interface AiProviderConfig {
+export interface AiServiceSourceConfig {
+  readonly id: string;
+  readonly name: string;
   readonly baseUrl: string;
   readonly apiKey: string;
-  readonly model: string;
+  readonly models: readonly string[];
+  readonly enabled?: boolean;
+}
+
+export interface AiProviderConfig {
+  readonly sources?: readonly AiServiceSourceConfig[];
+  readonly fallbackEnabled?: boolean;
+  readonly baseUrl?: string;
+  readonly apiKey?: string;
+  readonly model?: string;
 }
 
 export interface GoogleProviderConfig {

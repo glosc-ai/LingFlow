@@ -3,21 +3,21 @@ import { TranslationScheduler } from './translation-scheduler';
 import type { TranslatorProviderAdapter } from '../types';
 
 describe('TranslationScheduler', () => {
-  it('translates with a mock provider and caches repeated requests', async () => {
+  it('translates with an injected provider and caches repeated requests', async () => {
     let calls = 0;
     const provider: TranslatorProviderAdapter = {
-      id: 'mock',
+      id: 'baidu-free',
       async translate(request) {
         calls += 1;
         return {
           text: `translated:${request.text}`,
           sourceText: request.text,
           targetLanguage: request.targetLanguage,
-          provider: 'mock',
+          provider: 'baidu-free',
         };
       },
     };
-    const scheduler = new TranslationScheduler({ defaultProvider: 'mock', providers: [provider] });
+    const scheduler = new TranslationScheduler({ defaultProvider: 'baidu-free', providers: [provider] });
 
     const first = await scheduler.translate({ text: 'hello', targetLanguage: 'zh-CN' });
     const second = await scheduler.translate({ text: 'hello', targetLanguage: 'zh-CN' });
@@ -29,7 +29,7 @@ describe('TranslationScheduler', () => {
 
   it('keeps batch order and returns structured failures', async () => {
     const provider: TranslatorProviderAdapter = {
-      id: 'mock',
+      id: 'baidu-free',
       async translate(request) {
         if (request.text === 'bad') {
           throw new Error('boom');
@@ -38,11 +38,11 @@ describe('TranslationScheduler', () => {
           text: request.text.toUpperCase(),
           sourceText: request.text,
           targetLanguage: request.targetLanguage,
-          provider: 'mock',
+          provider: 'baidu-free',
         };
       },
     };
-    const scheduler = new TranslationScheduler({ defaultProvider: 'mock', providers: [provider] });
+    const scheduler = new TranslationScheduler({ defaultProvider: 'baidu-free', providers: [provider] });
 
     const results = await scheduler.translateBatch([
       { text: 'ok', targetLanguage: 'zh-CN' },
