@@ -3,8 +3,10 @@ import {
   DEFAULT_SETTINGS,
   SETTINGS_STORAGE_KEY,
   type BackgroundMessage,
+  type DesktopStatusMessageResponse,
   type LingFlowSettings,
   type ProviderTestMessageResponse,
+  type SelectionReportMessageResponse,
   type TranslationMessageResponse,
 } from './shared/messages';
 
@@ -12,7 +14,7 @@ chrome.runtime.onMessage.addListener(
   (
     message: BackgroundMessage,
     _sender: chrome.runtime.MessageSender,
-    sendResponse: (response: TranslationMessageResponse | ProviderTestMessageResponse) => void,
+    sendResponse: (response: TranslationMessageResponse | ProviderTestMessageResponse | DesktopStatusMessageResponse | SelectionReportMessageResponse) => void,
   ) => {
     if (message.type === 'LF_TRANSLATE_TEXT') {
       respondAsync(sendResponse, async () => ({ ok: true, value: await translateText(message.text, message.settings) }));
@@ -21,6 +23,16 @@ chrome.runtime.onMessage.addListener(
 
     if (message.type === 'LF_TEST_PROVIDER') {
       respondAsync(sendResponse, () => testProvider(message.settings));
+      return true;
+    }
+
+    if (message.type === 'LF_DESKTOP_STATUS') {
+      respondAsync(sendResponse, checkDesktopStatus);
+      return true;
+    }
+
+    if (message.type === 'LF_REPORT_SELECTION') {
+      respondAsync(sendResponse, () => reportExternalSelection(message.text, message.x, message.y));
       return true;
     }
 
@@ -42,6 +54,7 @@ async function translateTextWithResolvedSettings(
   text: string,
   settings: LingFlowSettings,
   effectiveSettings: LingFlowSettings,
+  reportUsage = true,
 ) {
   if (
     effectiveSettings.provider === 'ai' &&
@@ -131,12 +144,17 @@ async function translateTextWithResolvedSettings(
         : undefined,
   });
 
-  return scheduler.translate({
+  const response = await scheduler.translate({
     text,
     sourceLanguage: effectiveSettings.sourceLanguage,
     targetLanguage: normalizeTargetLanguage(effectiveSettings.targetLanguage),
     provider: effectiveSettings.provider,
   });
+
+  if (reportUsage) {
+    await reportProviderUsage(settings, response.provider, response.sourceText.length);
+  }
+  return response;
 }
 
 async function testProvider(settings: LingFlowSettings): Promise<ProviderTestMessageResponse> {
@@ -151,11 +169,16 @@ async function testProvider(settings: LingFlowSettings): Promise<ProviderTestMes
     sourceLanguage: 'en',
     targetLanguage: normalizeTargetLanguage(effectiveSettings.targetLanguage),
   };
-  const response = await translateTextWithResolvedSettings('Hello, LingFlow.', requestSettings, {
-    ...effectiveSettings,
-    sourceLanguage: 'en',
-    targetLanguage: normalizeTargetLanguage(effectiveSettings.targetLanguage),
-  });
+  const response = await translateTextWithResolvedSettings(
+    'Hello, LingFlow.',
+    requestSettings,
+    {
+      ...effectiveSettings,
+      sourceLanguage: 'en',
+      targetLanguage: normalizeTargetLanguage(effectiveSettings.targetLanguage),
+    },
+    false,
+  );
 
   return {
     ok: true,
@@ -166,8 +189,8 @@ async function testProvider(settings: LingFlowSettings): Promise<ProviderTestMes
 }
 
 function respondAsync(
-  sendResponse: (response: TranslationMessageResponse | ProviderTestMessageResponse) => void,
-  task: () => Promise<TranslationMessageResponse | ProviderTestMessageResponse>,
+  sendResponse: (response: TranslationMessageResponse | ProviderTestMessageResponse | DesktopStatusMessageResponse | SelectionReportMessageResponse) => void,
+  task: () => Promise<TranslationMessageResponse | ProviderTestMessageResponse | DesktopStatusMessageResponse | SelectionReportMessageResponse>,
 ) {
   let settled = false;
   const timeout = setTimeout(() => {
@@ -204,6 +227,40 @@ function respondAsync(
         error: normalizeError(error),
       });
     });
+}
+
+async function reportExternalSelection(text: string, x: number, y: number): Promise<SelectionReportMessageResponse> {
+  const result = await chrome.storage.local.get(SETTINGS_STORAGE_KEY);
+  const settings = { ...DEFAULT_SETTINGS, ...(result[SETTINGS_STORAGE_KEY] as Partial<LingFlowSettings> | undefined) };
+  if (settings.useLocalProxy === false) {
+    return { ok: false, error: 'Desktop proxy is disabled' };
+  }
+
+  const response = await fetch(`${normalizeLocalProxyUrl(settings.localProxyUrl)}/selection`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text, x, y }),
+  });
+  if (!response.ok) {
+    return { ok: false, error: `LingFlow desktop selection proxy returned HTTP ${response.status}: ${await response.text()}` };
+  }
+
+  return { ok: true };
+}
+
+async function checkDesktopStatus(): Promise<DesktopStatusMessageResponse> {
+  const result = await chrome.storage.local.get(SETTINGS_STORAGE_KEY);
+  const settings = { ...DEFAULT_SETTINGS, ...(result[SETTINGS_STORAGE_KEY] as Partial<LingFlowSettings> | undefined) };
+  if (settings.useLocalProxy === false) {
+    return { ok: false, error: 'Desktop proxy is disabled' };
+  }
+
+  const response = await fetch(`${normalizeLocalProxyUrl(settings.localProxyUrl)}/settings`);
+  if (!response.ok) {
+    return { ok: false, error: `LingFlow desktop proxy returned HTTP ${response.status}` };
+  }
+
+  return { ok: true };
 }
 
 function normalizeError(error: unknown) {
@@ -287,6 +344,24 @@ function createLocalProxyHttpClient(proxyUrl: string): ProviderHttpClient {
     const proxied = (await response.json()) as { readonly status: number; readonly body: string };
     return new Response(proxied.body, { status: proxied.status });
   };
+}
+
+async function reportProviderUsage(settings: LingFlowSettings, provider: string, characters: number) {
+  if (settings.useLocalProxy === false || characters <= 0) {
+    return;
+  }
+
+  try {
+    await fetch(`${normalizeLocalProxyUrl(settings.localProxyUrl)}/usage`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ provider, characters }),
+    });
+  } catch (error) {
+    console.warn('LingFlow provider usage sync failed', error);
+  }
 }
 
 function normalizeLocalProxyUrl(proxyUrl?: string) {

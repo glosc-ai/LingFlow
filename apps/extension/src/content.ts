@@ -28,8 +28,13 @@ let lazyRunId = 0;
 const queuedSegments: ReadableSegment[] = [];
 const queuedSegmentIds = new Set<string>();
 const translatedSegmentIds = new Set<string>();
+let lastSelectionReportAt = 0;
 
-mountSidebarButton();
+void refreshSidebarButtonVisibility();
+window.setInterval(() => void refreshSidebarButtonVisibility(), 10000);
+document.addEventListener('mouseup', (event) => {
+  void reportBrowserSelection(event);
+}, true);
 
 chrome.runtime.onMessage.addListener(
   (
@@ -66,6 +71,52 @@ async function handleContentMessage(message: ContentMessage): Promise<ContentMes
   }
 
   return { ok: false, error: 'Unsupported LingFlow command' };
+}
+
+async function reportBrowserSelection(event: MouseEvent) {
+  if (event.button !== 0 || isLingFlowUiEvent(event)) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastSelectionReportAt < 350) {
+    return;
+  }
+
+  const selection = window.getSelection();
+  const text = selection?.toString().replace(/\s+/g, ' ').trim() ?? '';
+  if (!selection || selection.isCollapsed || text.length < 2) {
+    return;
+  }
+
+  if (!(await isDesktopConnected())) {
+    return;
+  }
+
+  lastSelectionReportAt = now;
+  const position = browserMouseEventToScreenPosition(event);
+  await sendRuntimeMessage<{ readonly ok: boolean; readonly error?: string }>({
+    type: 'LF_REPORT_SELECTION',
+    text,
+    x: position.x,
+    y: position.y,
+  }).catch((error) => {
+    console.debug('LingFlow browser selection report failed', error);
+  });
+}
+
+function isLingFlowUiEvent(event: MouseEvent) {
+  const target = event.target;
+  return target instanceof Element && Boolean(target.closest('[data-lingflow-ui="true"], [data-lingflow-injected="true"]'));
+}
+
+function browserMouseEventToScreenPosition(event: MouseEvent) {
+  const sideInset = Math.max(0, (window.outerWidth - window.innerWidth) / 2);
+  const topInset = Math.max(0, window.outerHeight - window.innerHeight - sideInset);
+  return {
+    x: window.screenX + sideInset + event.clientX,
+    y: window.screenY + topInset + event.clientY,
+  };
 }
 
 async function translatePagePreview() {
@@ -221,6 +272,25 @@ function stopPageTranslation() {
   updateSidebarButton('ready');
 }
 
+async function refreshSidebarButtonVisibility() {
+  const online = await isDesktopConnected();
+  if (online) {
+    mountSidebarButton();
+    return;
+  }
+
+  document.getElementById(SIDEBAR_BUTTON_ID)?.remove();
+}
+
+async function isDesktopConnected() {
+  try {
+    const response = await sendRuntimeMessage<{ readonly ok: boolean; readonly error?: string }>({ type: 'LF_DESKTOP_STATUS' });
+    return Boolean(response?.ok);
+  } catch {
+    return false;
+  }
+}
+
 function mountSidebarButton() {
   if (document.getElementById(SIDEBAR_BUTTON_ID)) {
     return;
@@ -303,6 +373,11 @@ function mountSidebarButton() {
 }
 
 async function togglePageTranslation() {
+  if (!(await isDesktopConnected())) {
+    document.getElementById(SIDEBAR_BUTTON_ID)?.remove();
+    return;
+  }
+
   if (pageTranslated) {
     stopPageTranslation();
     return;

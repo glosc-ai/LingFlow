@@ -136,6 +136,15 @@ cd E:\LingFlow\apps\app
 pnpm tauri dev
 ```
 
+注意：命令末尾不要加 `/`。`pnpm tauri dev/` 会被 Tauri CLI 识别为不存在的 `dev/` 子命令。
+
+也可以从仓库根目录启动：
+
+```powershell
+cd E:\LingFlow
+pnpm --filter app tauri dev
+```
+
 构建 Tauri 安装包：
 
 ```powershell
@@ -172,6 +181,8 @@ cargo check
    E:\LingFlow\apps\extension\dist
    ```
 
+   不要选择 `E:\LingFlow\apps\extension` 源码目录。源码目录是 CRXJS 开发模式，未启动 Vite dev server 时会出现 `CRXJS DEV MODE` 或 `src/content.ts-loader.js` 注入失败。
+
 4. 启动 Tauri 桌面端：
 
    ```powershell
@@ -180,12 +191,13 @@ cargo check
    ```
 
 5. 在桌面端选择 Provider 并填写密钥。
-6. 打开扩展 popup，保持 `Desktop proxy` 开启。
-7. 点击 `Test provider connection`。
+6. 打开扩展 popup，保持桌面端代理开启。
+7. 点击“检查本地代理”或“测试服务源”。
 8. 打开普通网页，测试：
-   - `Selection`：翻译选中段落。
-   - `Page`：翻译当前页面可读段落预览。
-   - `Clear page translations`：清理注入的双语内容。
+   - 点击网页右侧 LingFlow 按钮：开启视口懒翻译。
+   - 再次点击网页右侧 LingFlow 按钮：撤销当前页面翻译。
+   - 在扩展 popup 中点击“整页翻译”：开启当前页面翻译。
+   - 在扩展 popup 中点击“清除页面翻译”：清理注入的双语内容。
 
 如果扩展提示找不到旧的 `assets/content*.js`，说明浏览器仍在运行旧 manifest。请在扩展管理页删除 LingFlow 后重新加载 `apps/extension/dist`。
 

@@ -426,6 +426,73 @@ select {
   color: var(--danger);
 }
 
+.desktop-offline-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid color-mix(in oklch, var(--warning) 42%, var(--border));
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--warning-ghost), var(--surface));
+  padding: 13px;
+}
+
+.desktop-offline-header {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 9px;
+  color: var(--warning);
+}
+
+.desktop-offline-header svg {
+  margin-top: 2px;
+}
+
+.desktop-offline-header h2 {
+  margin: 0;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.desktop-offline-header p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.desktop-offline-meta {
+  display: grid;
+  gap: 5px;
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 9px 10px;
+}
+
+.desktop-offline-meta span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.desktop-offline-meta code {
+  overflow: hidden;
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-offline-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.desktop-offline-actions a {
+  text-decoration: none;
+}
+
 .advanced-card {
   display: block;
 }

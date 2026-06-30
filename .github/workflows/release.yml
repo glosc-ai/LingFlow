@@ -1,0 +1,142 @@
+name: Release LingFlow
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - apps/app/src-tauri/tauri.conf.json
+      - apps/extension/manifest.ts
+      - apps/app/src-tauri/Cargo.toml
+      - apps/app/src-tauri/Cargo.lock
+      - pnpm-lock.yaml
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    name: Check Version Change
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.version.outputs.should_release }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_version="$(node -p "require('./apps/app/src-tauri/tauri.conf.json').version")"
+          previous_version=""
+
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            if git show HEAD^:apps/app/src-tauri/tauri.conf.json > previous-tauri.conf.json 2>/dev/null; then
+              previous_version="$(node -p "require('./previous-tauri.conf.json').version")"
+            fi
+          fi
+
+          should_release="false"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$current_version" != "$previous_version" ]; then
+            should_release="true"
+          fi
+
+          echo "should_release=$should_release" >> "$GITHUB_OUTPUT"
+          echo "version=$current_version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$current_version" >> "$GITHUB_OUTPUT"
+          echo "Current version: $current_version"
+          echo "Previous version: ${previous_version:-<none>}"
+          echo "Should release: $should_release"
+
+  build-release:
+    name: Build Windows Desktop And Extension
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: windows-latest
+    env:
+      RELEASE_VERSION: ${{ needs.check-version.outputs.version }}
+      RELEASE_TAG: ${{ needs.check-version.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/app/src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build browser extension
+        run: pnpm --filter extension build
+
+      - name: Package browser extension
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $zipPath = "artifacts/lingflow-extension-v$env:RELEASE_VERSION.zip"
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+          Compress-Archive -Path "apps/extension/dist/*" -DestinationPath $zipPath
+
+      - name: Build Tauri Windows desktop app
+        run: pnpm --filter app tauri build
+
+      - name: Collect desktop bundles
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/desktop | Out-Null
+          $bundleRoot = "apps/app/src-tauri/target/release/bundle"
+          if (!(Test-Path $bundleRoot)) {
+            throw "Tauri bundle directory not found: $bundleRoot"
+          }
+          Get-ChildItem $bundleRoot -Recurse -File |
+            Where-Object { $_.Extension -in ".msi", ".exe", ".zip", ".dmg", ".deb", ".rpm", ".AppImage" } |
+            Copy-Item -Destination artifacts/desktop -Force
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lingflow-release-${{ env.RELEASE_VERSION }}
+          path: artifacts/**
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: LingFlow ${{ env.RELEASE_VERSION }}
+          generate_release_notes: true
+          files: |
+            artifacts/lingflow-extension-v${{ env.RELEASE_VERSION }}.zip
+            artifacts/desktop/*

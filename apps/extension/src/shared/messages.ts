@@ -45,6 +45,15 @@ export type BackgroundMessage =
   | {
       readonly type: 'LF_TEST_PROVIDER';
       readonly settings: LingFlowSettings;
+    }
+  | {
+      readonly type: 'LF_DESKTOP_STATUS';
+    }
+  | {
+      readonly type: 'LF_REPORT_SELECTION';
+      readonly text: string;
+      readonly x: number;
+      readonly y: number;
     };
 
 export type TranslationMessageResponse =
@@ -58,6 +67,14 @@ export type ProviderTestMessageResponse =
       readonly elapsedMs: number;
       readonly translatedText: string;
     }
+  | { readonly ok: false; readonly error: string };
+
+export type DesktopStatusMessageResponse =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: string };
+
+export type SelectionReportMessageResponse =
+  | { readonly ok: true }
   | { readonly ok: false; readonly error: string };
 
 export const DEFAULT_SETTINGS: LingFlowSettings = {
