@@ -9,6 +9,7 @@ import {
   Plus,
   RadioTower,
   RefreshCw,
+  ExternalLink,
   Sun,
   X,
 } from 'lucide-react';
@@ -47,6 +48,7 @@ const TARGET_LANGUAGES = [
 ];
 
 type DesktopSettings = Partial<LingFlowSettings>;
+type DesktopConnectionState = 'checking' | 'online' | 'offline';
 
 interface AiModelCatalog {
   readonly error?: string;
@@ -62,6 +64,7 @@ function App() {
   const [testingProxy, setTestingProxy] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [desktopSettings, setDesktopSettings] = useState<DesktopSettings | null>(null);
+  const [desktopConnection, setDesktopConnection] = useState<DesktopConnectionState>('checking');
 
   const useLocalProxy = settings.useLocalProxy !== false;
   const localProxyUrl = settings.localProxyUrl ?? DEFAULT_SETTINGS.localProxyUrl ?? '';
@@ -90,19 +93,23 @@ function App() {
   useEffect(() => {
     if (!useLocalProxy) {
       setDesktopSettings(null);
+      setDesktopConnection('online');
       return;
     }
 
     let cancelled = false;
+    setDesktopConnection('checking');
     fetchDesktopSettings(localProxyUrl)
       .then((value) => {
         if (!cancelled) {
           setDesktopSettings(value);
+          setDesktopConnection('online');
         }
       })
       .catch(() => {
         if (!cancelled) {
           setDesktopSettings(null);
+          setDesktopConnection('offline');
         }
       });
 
@@ -338,6 +345,10 @@ function App() {
           </div>
         </Section>
 
+        {useLocalProxy && desktopConnection === 'offline' ? (
+          <DesktopOfflineNotice localProxyUrl={localProxyUrl} onRetry={() => void retryDesktopConnection()} />
+        ) : null}
+
         <AdvancedProviderSettings settings={settings} updateSettings={updateSettings} useLocalProxy={useLocalProxy} />
 
         <div className="action-grid">
@@ -365,9 +376,61 @@ function App() {
       </footer>
     </main>
   );
+
+  async function retryDesktopConnection() {
+    setDesktopConnection('checking');
+    setStatus('正在连接 LingFlow 桌面端');
+    setStatusTone('warn');
+    try {
+      const nextDesktopSettings = await fetchDesktopSettings(localProxyUrl);
+      setDesktopSettings(nextDesktopSettings);
+      setDesktopConnection('online');
+      setStatus('LingFlow 桌面端已连接');
+      setStatusTone('ok');
+    } catch {
+      setDesktopSettings(null);
+      setDesktopConnection('offline');
+      setStatus('未检测到 LingFlow 桌面端');
+      setStatusTone('warn');
+    }
+  }
 }
 
 export default App;
+
+function DesktopOfflineNotice({
+  localProxyUrl,
+  onRetry,
+}: {
+  readonly localProxyUrl: string;
+  readonly onRetry: () => void;
+}) {
+  return (
+    <section className="desktop-offline-card">
+      <div className="desktop-offline-header">
+        <RadioTower size={16} />
+        <div>
+          <h2>需要 LingFlow 桌面端</h2>
+          <p>浏览器扩展通过桌面端本地代理同步服务商配置和密钥，因此需要先打开 LingFlow 桌面端。</p>
+        </div>
+      </div>
+      <div className="desktop-offline-meta">
+        <span>当前代理地址</span>
+        <code>{localProxyUrl}</code>
+      </div>
+      <div className="desktop-offline-actions">
+        <Button onClick={onRetry}>
+          <RefreshCw size={14} />
+          重新检测
+        </Button>
+        <a className="popup-button primary" href="https://github.com/glosc-ai/LingFlow/releases" rel="noreferrer" target="_blank">
+          <ExternalLink size={14} />
+          下载桌面端
+        </a>
+      </div>
+    </section>
+  );
+}
 
 function ReadonlyField({
   chip,
@@ -921,9 +984,21 @@ async function injectContentScript(tabId: number): Promise<ContentMessageRespons
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : '无法注入 LingFlow，请刷新普通 http/https 页面后重试',
+      error: normalizeContentScriptInjectionError(error),
     };
   }
+}
+
+function normalizeContentScriptInjectionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('src/content.ts-loader.js') || message.includes('CRXJS') || message.includes('Could not load file')) {
+    return [
+      '当前浏览器仍在使用 LingFlow 开发模式或旧版扩展入口，无法注入页面脚本。',
+      '请在扩展管理页删除旧 LingFlow 扩展后，重新加载 E:\\LingFlow\\apps\\extension\\dist，并刷新当前网页。',
+    ].join(' ');
+  }
+
+  return message || '无法注入 LingFlow，请刷新普通 http/https 页面后重试';
 }
 
 function sanitizeSettingsForStorage(settings: LingFlowSettings): LingFlowSettings {

@@ -1,34 +1,31 @@
 ﻿use std::{
     collections::{HashMap, HashSet},
+    fs,
     mem::size_of,
+    path::PathBuf,
     ptr::null_mut,
     sync::{mpsc, Arc, Mutex, OnceLock, RwLock},
     thread,
     time::{Duration, Instant},
 };
-use tauri::{Emitter, Manager};
+use rusqlite::{params, Connection};
+use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size};
 use windows::{
     core::{BOOL, Interface},
     Win32::{
-        Foundation::{CloseHandle, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{CloseHandle, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         System::{
             Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED},
-            DataExchange::{
-                CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
-                SetClipboardData,
-            },
+            DataExchange::{CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard},
             Diagnostics::ToolHelp::{
                 CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
                 TH32CS_SNAPPROCESS,
             },
-            Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE},
+            Memory::{GlobalLock, GlobalSize, GlobalUnlock},
             Threading::{GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION},
         },
         UI::{
             Accessibility::{CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId},
-            Input::KeyboardAndMouse::{
-                SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL, VK_C,
-            },
             WindowsAndMessaging::{
                 CallNextHookEx, GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetWindowThreadProcessId,
                 GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, SetWindowsHookExW, UnhookWindowsHookEx,
@@ -56,7 +53,7 @@ const CF_UNICODETEXT_FORMAT: u32 = 13;
 const EM_GETSEL_MESSAGE: u32 = 0x00B0;
 const GLOBAL_MOUSE_UP_EVENT: &str = "lingflow://global-mouse-up";
 
-static GLOBAL_MOUSE_UP_TX: OnceLock<mpsc::Sender<()>> = OnceLock::new();
+static GLOBAL_MOUSE_UP_TX: OnceLock<mpsc::Sender<ScreenPoint>> = OnceLock::new();
 static GLOBAL_MOUSE_DRAG_STATE: OnceLock<Mutex<Option<MouseDragState>>> = OnceLock::new();
 
 struct MouseDragState {
@@ -69,6 +66,7 @@ struct MouseDragState {
 struct LocalProxyState {
     settings: Arc<RwLock<Option<AppRuntimeSettings>>>,
     listeners: Arc<Mutex<HashSet<String>>>,
+    app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
 }
 
 impl AppRuntimeSettings {
@@ -87,10 +85,35 @@ impl AppRuntimeSettings {
 #[derive(Clone)]
 struct SelectionCaptureState {
     inner: Arc<Mutex<SelectionCaptureGuard>>,
+    diagnostics: Arc<Mutex<SelectionDiagnostics>>,
 }
 
 struct SelectionCaptureGuard {
     last_capture: Option<Instant>,
+}
+
+#[derive(serde::Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct SelectionDiagnostics {
+    stage: String,
+    cursor_position: Option<ScreenPoint>,
+    process_name: Option<String>,
+    excluded: bool,
+    attempts: Vec<SelectionAttempt>,
+    result_length: Option<usize>,
+    error: Option<String>,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SelectionAttempt {
+    strategy: String,
+    ok: bool,
+    detail: String,
+}
+
+struct AppDataStoreState {
+    connection: Arc<Mutex<Option<Connection>>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -98,28 +121,52 @@ pub fn run() {
     let proxy_state = LocalProxyState {
         settings: Arc::new(RwLock::new(None)),
         listeners: Arc::new(Mutex::new(HashSet::new())),
+        app_handle: Arc::new(Mutex::new(None)),
     };
+    let proxy_app_handle = proxy_state.app_handle.clone();
     let selection_state = SelectionCaptureState {
         inner: Arc::new(Mutex::new(SelectionCaptureGuard { last_capture: None })),
+        diagnostics: Arc::new(Mutex::new(SelectionDiagnostics::default())),
     };
+    let app_data_store = AppDataStoreState {
+        connection: Arc::new(Mutex::new(None)),
+    };
+    let app_data_connection = app_data_store.connection.clone();
 
     tauri::Builder::default()
         .manage(proxy_state)
         .manage(selection_state)
+        .manage(app_data_store)
         .invoke_handler(tauri::generate_handler![
             http_request,
             sync_local_proxy_settings,
+            read_app_data,
+            write_app_data,
+            delete_app_data,
             read_app_secrets,
             save_app_secrets,
             delete_app_secrets,
             read_clipboard_text,
             capture_foreground_selection,
             read_foreground_selected_text,
+            selection_diagnostics,
             set_overlay_no_activate,
             list_running_process_names,
             foreground_process_name
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            let connection = open_app_data_store(app.handle()).map_err(|error| {
+                Box::<dyn std::error::Error>::from(std::io::Error::new(std::io::ErrorKind::Other, error))
+            })?;
+            if let Ok(mut current_connection) = app_data_connection.lock() {
+                *current_connection = Some(connection);
+            }
+            if let Ok(mut current_app_handle) = proxy_app_handle.lock() {
+                *current_app_handle = Some(app.handle().clone());
+            }
+            if let Err(error) = center_main_window_at_screen_ratio(app.handle(), 0.6) {
+                log::warn!("failed to size LingFlow main window: {error}");
+            }
             start_global_mouse_up_listener(app.handle().clone());
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -132,6 +179,32 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+
+fn center_main_window_at_screen_ratio(app_handle: &tauri::AppHandle, ratio: f64) -> Result<(), String> {
+    let Some(window) = app_handle.get_webview_window("main") else {
+        return Ok(());
+    };
+    let Some(monitor) = window.current_monitor().map_err(|error| error.to_string())? else {
+        return Ok(());
+    };
+
+    let monitor_size = monitor.size();
+    let monitor_position = monitor.position();
+    let ratio = ratio.clamp(0.2, 1.0);
+    let width = ((monitor_size.width as f64) * ratio).round() as u32;
+    let height = ((monitor_size.height as f64) * ratio).round() as u32;
+    let x = monitor_position.x + ((monitor_size.width.saturating_sub(width) / 2) as i32);
+    let y = monitor_position.y + ((monitor_size.height.saturating_sub(height) / 2) as i32);
+
+    window
+        .set_size(Size::Physical(PhysicalSize { width, height }))
+        .map_err(|error| error.to_string())?;
+    window
+        .set_position(Position::Physical(PhysicalPosition { x, y }))
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -148,9 +221,11 @@ fn foreground_process_name() -> Result<String, String> {
 async fn capture_foreground_selection(
     state: tauri::State<'_, SelectionCaptureState>,
     excluded_apps: Vec<String>,
+    cursor_position: Option<ScreenPoint>,
 ) -> Result<String, String> {
     let inner = state.inner.clone();
-    tauri::async_runtime::spawn_blocking(move || capture_foreground_selection_with_state(inner, excluded_apps))
+    let diagnostics = state.diagnostics.clone();
+    tauri::async_runtime::spawn_blocking(move || capture_foreground_selection_with_state(inner, diagnostics, excluded_apps, cursor_position))
         .await
         .map_err(|error| error.to_string())?
 }
@@ -160,7 +235,16 @@ async fn read_foreground_selected_text(
     state: tauri::State<'_, SelectionCaptureState>,
     excluded_apps: Vec<String>,
 ) -> Result<String, String> {
-    capture_foreground_selection(state, excluded_apps).await
+    capture_foreground_selection(state, excluded_apps, None).await
+}
+
+#[tauri::command]
+fn selection_diagnostics(state: tauri::State<SelectionCaptureState>) -> Result<SelectionDiagnostics, String> {
+    state
+        .diagnostics
+        .lock()
+        .map(|diagnostics| diagnostics.clone())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -214,39 +298,131 @@ fn list_running_process_names() -> Result<Vec<String>, String> {
 
 fn capture_foreground_selection_with_state(
     inner: Arc<Mutex<SelectionCaptureGuard>>,
+    diagnostics: Arc<Mutex<SelectionDiagnostics>>,
     excluded_apps: Vec<String>,
+    cursor_position: Option<ScreenPoint>,
 ) -> Result<String, String> {
+    write_selection_diagnostics(&diagnostics, SelectionDiagnostics {
+        stage: "started".to_string(),
+        cursor_position,
+        ..Default::default()
+    });
     {
         let mut guard = inner
             .try_lock()
-            .map_err(|_| "Selection capture is already running".to_string())?;
+            .map_err(|_| {
+                let error = "Selection capture is already running".to_string();
+                write_selection_diagnostics(&diagnostics, SelectionDiagnostics {
+                    stage: "busy".to_string(),
+                    cursor_position,
+                    error: Some(error.clone()),
+                    ..Default::default()
+                });
+                error
+            })?;
         if guard
             .last_capture
             .is_some_and(|last_capture| last_capture.elapsed() < Duration::from_millis(350))
         {
-            return Err("Selection capture debounced".to_string());
+            let error = "Selection capture debounced".to_string();
+            write_selection_diagnostics(&diagnostics, SelectionDiagnostics {
+                stage: "debounced".to_string(),
+                cursor_position,
+                error: Some(error.clone()),
+                ..Default::default()
+            });
+            return Err(error);
         }
         guard.last_capture = Some(Instant::now());
     }
 
-    capture_foreground_selection_inner(&excluded_apps)
+    let result = capture_foreground_selection_inner(&diagnostics, &excluded_apps, cursor_position);
+    if let Err(error) = &result {
+        update_selection_diagnostics(&diagnostics, |current| {
+            current.stage = "failed".to_string();
+            current.error = Some(error.clone());
+        });
+    }
+    result
 }
 
-fn capture_foreground_selection_inner(excluded_apps: &[String]) -> Result<String, String> {
+fn capture_foreground_selection_inner(
+    diagnostics: &Arc<Mutex<SelectionDiagnostics>>,
+    excluded_apps: &[String],
+    cursor_position: Option<ScreenPoint>,
+) -> Result<String, String> {
     let process_name = foreground_process_name_inner()?;
+    update_selection_diagnostics(diagnostics, |current| {
+        current.stage = "process-resolved".to_string();
+        current.cursor_position = cursor_position;
+        current.process_name = Some(process_name.clone());
+    });
+
     if is_excluded_process(&process_name, excluded_apps) {
-        return Err(format!("{process_name} is excluded from global selection translation"));
+        let error = format!("{process_name} is excluded from global selection translation");
+        update_selection_diagnostics(diagnostics, |current| {
+            current.stage = "excluded".to_string();
+            current.excluded = true;
+            current.error = Some(error.clone());
+        });
+        return Err(error);
     }
 
-    if let Ok(text) = selected_text_from_uia() {
-        return Ok(text);
+    match selected_text_from_uia(cursor_position) {
+        Ok(text) => {
+            push_selection_attempt(diagnostics, "uia", true, format!("{} chars", text.len()));
+            update_selection_diagnostics(diagnostics, |current| {
+                current.stage = "success".to_string();
+                current.result_length = Some(text.len());
+            });
+            return Ok(text);
+        }
+        Err(error) => push_selection_attempt(diagnostics, "uia", false, error),
     }
 
-    if let Ok(text) = selected_text_from_standard_edit() {
-        return Ok(text);
+    match selected_text_from_standard_edit() {
+        Ok(text) => {
+            push_selection_attempt(diagnostics, "standard-edit", true, format!("{} chars", text.len()));
+            update_selection_diagnostics(diagnostics, |current| {
+                current.stage = "success".to_string();
+                current.result_length = Some(text.len());
+            });
+            return Ok(text);
+        }
+        Err(error) => push_selection_attempt(diagnostics, "standard-edit", false, error),
     }
 
-    selected_text_from_clipboard_fallback()
+    Err("No selected text was found through Windows UI Automation".to_string())
+}
+
+fn write_selection_diagnostics(diagnostics: &Arc<Mutex<SelectionDiagnostics>>, next: SelectionDiagnostics) {
+    if let Ok(mut current) = diagnostics.lock() {
+        *current = next;
+    }
+}
+
+fn update_selection_diagnostics(
+    diagnostics: &Arc<Mutex<SelectionDiagnostics>>,
+    update: impl FnOnce(&mut SelectionDiagnostics),
+) {
+    if let Ok(mut current) = diagnostics.lock() {
+        update(&mut current);
+    }
+}
+
+fn push_selection_attempt(
+    diagnostics: &Arc<Mutex<SelectionDiagnostics>>,
+    strategy: impl Into<String>,
+    ok: bool,
+    detail: impl Into<String>,
+) {
+    update_selection_diagnostics(diagnostics, |current| {
+        current.attempts.push(SelectionAttempt {
+            strategy: strategy.into(),
+            ok,
+            detail: detail.into(),
+        });
+    });
 }
 
 fn normalize_selected_text(value: String) -> Result<String, String> {
@@ -324,13 +500,13 @@ fn focused_control_window() -> Result<HWND, String> {
 }
 
 fn start_global_mouse_up_listener(app_handle: tauri::AppHandle) {
-    let (tx, rx) = mpsc::channel::<()>();
+    let (tx, rx) = mpsc::channel::<ScreenPoint>();
     let _ = GLOBAL_MOUSE_UP_TX.set(tx);
     let _ = GLOBAL_MOUSE_DRAG_STATE.set(Mutex::new(None));
 
     thread::spawn(move || {
-        for _ in rx {
-            let _ = app_handle.emit(GLOBAL_MOUSE_UP_EVENT, ());
+        for point in rx {
+            let _ = app_handle.emit(GLOBAL_MOUSE_UP_EVENT, point);
         }
     });
 
@@ -357,11 +533,12 @@ unsafe extern "system" fn global_mouse_hook_proc(code: i32, wparam: WPARAM, lpar
         if matches!(message, WM_LBUTTONDOWN | WM_RBUTTONDOWN) {
             remember_global_mouse_down(message, lparam);
         } else if matches!(message, WM_LBUTTONUP | WM_RBUTTONUP)
-            && global_mouse_up_looks_like_selection_drag(message, lparam)
             && !mouse_event_is_on_lingflow_window(lparam)
         {
-            if let Some(tx) = GLOBAL_MOUSE_UP_TX.get() {
-                let _ = tx.send(());
+            if let Some(point) = global_mouse_up_selection_point(message, lparam) {
+                if let Some(tx) = GLOBAL_MOUSE_UP_TX.get() {
+                    let _ = tx.send(ScreenPoint { x: point.x, y: point.y });
+                }
             }
         }
     }
@@ -385,29 +562,33 @@ fn remember_global_mouse_down(message: u32, lparam: LPARAM) {
     }
 }
 
-fn global_mouse_up_looks_like_selection_drag(message: u32, lparam: LPARAM) -> bool {
+fn global_mouse_up_selection_point(message: u32, lparam: LPARAM) -> Option<POINT> {
     let Some(state) = GLOBAL_MOUSE_DRAG_STATE.get() else {
-        return false;
+        return None;
     };
     let Some(up_point) = mouse_event_point(lparam) else {
-        return false;
+        return None;
     };
 
     let Ok(mut current) = state.lock() else {
-        return false;
+        return None;
     };
     let Some(down) = current.take() else {
-        return false;
+        return None;
     };
 
     if !mouse_buttons_match(down.button, message) {
-        return false;
+        return None;
     }
 
     let dx = i64::from(up_point.x) - i64::from(down.point.x);
     let dy = i64::from(up_point.y) - i64::from(down.point.y);
     let distance_squared = dx * dx + dy * dy;
-    distance_squared >= 64 && down.started_at.elapsed() >= Duration::from_millis(80)
+    if distance_squared >= 64 && down.started_at.elapsed() >= Duration::from_millis(80) {
+        Some(up_point)
+    } else {
+        None
+    }
 }
 
 fn mouse_buttons_match(down: u32, up: u32) -> bool {
@@ -482,14 +663,65 @@ fn window_belongs_to_current_process(hwnd: HWND) -> bool {
     process_id != 0 && process_id == unsafe { GetCurrentProcessId() }
 }
 
-fn selected_text_from_uia() -> Result<String, String> {
-    let hwnd = focused_control_window().or_else(|_| foreground_window())?;
+fn selected_text_from_uia(cursor_position: Option<ScreenPoint>) -> Result<String, String> {
     let _com = ComApartment::init()?;
     let automation: IUIAutomation =
         unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
             .map_err(|error| error.message().to_string())?;
-    let element = unsafe { automation.ElementFromHandle(hwnd) }
-        .map_err(|error| error.message().to_string())?;
+    let mut errors = Vec::<String>::new();
+
+    if let Some(point) = cursor_position {
+        let point = POINT { x: point.x, y: point.y };
+        match unsafe { automation.ElementFromPoint(point) } {
+            Ok(element) => match selected_text_from_uia_element(&element) {
+                Ok(text) => return Ok(text),
+                Err(error) => errors.push(format!("point-element: {error}")),
+            },
+            Err(error) => errors.push(format!("point-element lookup: {}", error.message())),
+        }
+
+        let point_hwnd = unsafe { WindowFromPoint(point) };
+        if point_hwnd.0.is_null() {
+            errors.push("point-window: WindowFromPoint returned null".to_string());
+        } else {
+            match unsafe { automation.ElementFromHandle(point_hwnd) } {
+                Ok(element) => match selected_text_from_uia_element(&element) {
+                    Ok(text) => return Ok(text),
+                    Err(error) => errors.push(format!("point-window: {error}")),
+                },
+                Err(error) => errors.push(format!("point-window lookup: {}", error.message())),
+            }
+        }
+    }
+
+    match focused_control_window() {
+        Ok(hwnd) => match unsafe { automation.ElementFromHandle(hwnd) } {
+            Ok(element) => match selected_text_from_uia_element(&element) {
+                Ok(text) => return Ok(text),
+                Err(error) => errors.push(format!("focused-control: {error}")),
+            },
+            Err(error) => errors.push(format!("focused-control lookup: {}", error.message())),
+        },
+        Err(error) => errors.push(format!("focused-control hwnd: {error}")),
+    }
+
+    let hwnd = foreground_window()?;
+    match unsafe { automation.ElementFromHandle(hwnd) } {
+        Ok(element) => match selected_text_from_uia_element(&element) {
+            Ok(text) => Ok(text),
+            Err(error) => {
+                errors.push(format!("foreground-window: {error}"));
+                Err(errors.join(" | "))
+            }
+        },
+        Err(error) => {
+            errors.push(format!("foreground-window lookup: {}", error.message()));
+            Err(errors.join(" | "))
+        }
+    }
+}
+
+fn selected_text_from_uia_element(element: &windows::Win32::UI::Accessibility::IUIAutomationElement) -> Result<String, String> {
     let pattern = unsafe { element.GetCurrentPattern(UIA_TextPatternId) }
         .map_err(|error| error.message().to_string())?;
     let text_pattern: IUIAutomationTextPattern =
@@ -550,50 +782,6 @@ fn selected_text_from_standard_edit() -> Result<String, String> {
     normalize_selected_text(String::from_utf16_lossy(&utf16[start..end]))
 }
 
-fn selected_text_from_clipboard_fallback() -> Result<String, String> {
-    let original_clipboard = read_clipboard_text_native().unwrap_or_default();
-    clear_clipboard_native()?;
-    send_copy_shortcut_native()?;
-    thread::sleep(Duration::from_millis(120));
-
-    let selected_text = read_clipboard_text_native().unwrap_or_default();
-    if let Err(error) = set_clipboard_text_native(&original_clipboard) {
-        log::warn!("failed to restore clipboard after selection fallback: {error}");
-    }
-
-    normalize_selected_text(selected_text)
-}
-
-fn send_copy_shortcut_native() -> Result<(), String> {
-    let inputs = [
-        keyboard_input(VK_CONTROL.0 as u16, false),
-        keyboard_input(VK_C.0 as u16, false),
-        keyboard_input(VK_C.0 as u16, true),
-        keyboard_input(VK_CONTROL.0 as u16, true),
-    ];
-    let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
-    if sent == inputs.len() as u32 {
-        Ok(())
-    } else {
-        Err("Failed to send Ctrl+C fallback".to_string())
-    }
-}
-
-fn keyboard_input(vk: u16, key_up: bool) -> INPUT {
-    INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 {
-            ki: KEYBDINPUT {
-                wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
-                wScan: 0,
-                dwFlags: if key_up { KEYEVENTF_KEYUP } else { Default::default() },
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    }
-}
-
 fn read_clipboard_text_native() -> Result<String, String> {
     let _clipboard = ClipboardSession::open()?;
     let available = unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT_FORMAT).is_ok() };
@@ -622,35 +810,6 @@ fn read_clipboard_text_native() -> Result<String, String> {
         let _ = GlobalUnlock(global);
     }
     Ok(text)
-}
-
-fn clear_clipboard_native() -> Result<(), String> {
-    let _clipboard = ClipboardSession::open()?;
-    unsafe { EmptyClipboard() }.map_err(|error| error.message().to_string())
-}
-
-fn set_clipboard_text_native(value: &str) -> Result<(), String> {
-    let _clipboard = ClipboardSession::open()?;
-    unsafe { EmptyClipboard() }.map_err(|error| error.message().to_string())?;
-    if value.is_empty() {
-        return Ok(());
-    }
-
-    let mut utf16 = value.encode_utf16().collect::<Vec<u16>>();
-    utf16.push(0);
-    let byte_len = utf16.len() * size_of::<u16>();
-    let handle = unsafe { GlobalAlloc(GMEM_MOVEABLE, byte_len) }
-        .map_err(|error| error.message().to_string())?;
-    let ptr = unsafe { GlobalLock(handle) } as *mut u16;
-    if ptr.is_null() {
-        return Err("Failed to lock clipboard allocation".to_string());
-    }
-    unsafe {
-        ptr.copy_from_nonoverlapping(utf16.as_ptr(), utf16.len());
-        let _ = GlobalUnlock(handle);
-        SetClipboardData(CF_UNICODETEXT_FORMAT, Some(HANDLE(handle.0))).map_err(|error| error.message().to_string())?;
-    }
-    Ok(())
 }
 
 struct ClipboardSession;
@@ -713,6 +872,29 @@ struct HttpResponse {
     body: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ProviderUsageReport {
+    provider: String,
+    characters: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ExternalSelectionReport {
+    text: String,
+    x: f64,
+    y: f64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+struct ScreenPoint {
+    x: i32,
+    y: i32,
+}
+
+
 #[tauri::command]
 async fn http_request(request: HttpRequest) -> Result<HttpResponse, String> {
     http_request_inner(request).await
@@ -768,6 +950,66 @@ fn sync_local_proxy_settings(
     drop(current);
 
     start_local_proxy(state.inner().clone(), proxy_addr)?;
+    Ok(())
+}
+
+
+fn app_data_store_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app_handle.path().app_data_dir().map_err(|error| error.to_string())?;
+    fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
+    Ok(app_data_dir.join("lingflow.sqlite"))
+}
+
+fn open_app_data_store(app_handle: &tauri::AppHandle) -> Result<Connection, String> {
+    let database_path = app_data_store_path(app_handle)?;
+    let connection = Connection::open(database_path).map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_data (
+             key TEXT PRIMARY KEY NOT NULL,
+             value TEXT NOT NULL,
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );",
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(connection)
+}
+
+#[tauri::command]
+fn read_app_data(state: tauri::State<AppDataStoreState>, key: String) -> Result<Option<String>, String> {
+    let guard = state.connection.lock().map_err(|error| error.to_string())?;
+    let connection = guard.as_ref().ok_or_else(|| "LingFlow app data store is not ready".to_string())?;
+    let mut statement = connection
+        .prepare("SELECT value FROM app_data WHERE key = ?1")
+        .map_err(|error| error.to_string())?;
+    let mut rows = statement.query(params![key]).map_err(|error| error.to_string())?;
+    match rows.next().map_err(|error| error.to_string())? {
+        Some(row) => row.get::<_, String>(0).map(Some).map_err(|error| error.to_string()),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+fn write_app_data(state: tauri::State<AppDataStoreState>, key: String, value: String) -> Result<(), String> {
+    let guard = state.connection.lock().map_err(|error| error.to_string())?;
+    let connection = guard.as_ref().ok_or_else(|| "LingFlow app data store is not ready".to_string())?;
+    connection
+        .execute(
+            "INSERT INTO app_data (key, value, updated_at) VALUES (?1, ?2, unixepoch())
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()",
+            params![key, value],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_app_data(state: tauri::State<AppDataStoreState>, key: String) -> Result<(), String> {
+    let guard = state.connection.lock().map_err(|error| error.to_string())?;
+    let connection = guard.as_ref().ok_or_else(|| "LingFlow app data store is not ready".to_string())?;
+    connection
+        .execute("DELETE FROM app_data WHERE key = ?1", params![key])
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -960,6 +1202,130 @@ fn handle_local_proxy_request(mut request: tiny_http::Request, state: &LocalProx
                 ),
             }
         }
+        (&tiny_http::Method::Post, "/usage") => {
+            let mut body = String::new();
+            if let Err(error) = request.as_reader().read_to_string(&mut body) {
+                respond_json(
+                    request,
+                    400,
+                    &serde_json::json!({ "error": error.to_string() }),
+                    origin.as_deref(),
+                );
+                return;
+            }
+
+            let report = match serde_json::from_str::<ProviderUsageReport>(&body) {
+                Ok(value) => value,
+                Err(error) => {
+                    respond_json(
+                        request,
+                        400,
+                        &serde_json::json!({ "error": error.to_string() }),
+                        origin.as_deref(),
+                    );
+                    return;
+                }
+            };
+
+            if report.provider.trim().is_empty() || report.characters == 0 {
+                respond_json(
+                    request,
+                    400,
+                    &serde_json::json!({ "error": "provider and positive characters are required" }),
+                    origin.as_deref(),
+                );
+                return;
+            }
+
+            let app_handle = match state.app_handle.lock() {
+                Ok(current) => current.clone(),
+                Err(error) => {
+                    respond_json(
+                        request,
+                        500,
+                        &serde_json::json!({ "error": error.to_string() }),
+                        origin.as_deref(),
+                    );
+                    return;
+                }
+            };
+
+            if let Some(app_handle) = app_handle {
+                if let Err(error) = app_handle.emit("lingflow://provider-usage", report.clone()) {
+                    respond_json(
+                        request,
+                        500,
+                        &serde_json::json!({ "error": error.to_string() }),
+                        origin.as_deref(),
+                    );
+                    return;
+                }
+            }
+
+            respond_json(request, 200, &serde_json::json!({ "ok": true }), origin.as_deref());
+        }
+        (&tiny_http::Method::Post, "/selection") => {
+            let mut body = String::new();
+            if let Err(error) = request.as_reader().read_to_string(&mut body) {
+                respond_json(
+                    request,
+                    400,
+                    &serde_json::json!({ "error": error.to_string() }),
+                    origin.as_deref(),
+                );
+                return;
+            }
+
+            let report = match serde_json::from_str::<ExternalSelectionReport>(&body) {
+                Ok(value) => value,
+                Err(error) => {
+                    respond_json(
+                        request,
+                        400,
+                        &serde_json::json!({ "error": error.to_string() }),
+                        origin.as_deref(),
+                    );
+                    return;
+                }
+            };
+
+            if report.text.trim().is_empty() {
+                respond_json(
+                    request,
+                    400,
+                    &serde_json::json!({ "error": "selected text is required" }),
+                    origin.as_deref(),
+                );
+                return;
+            }
+
+            let app_handle = match state.app_handle.lock() {
+                Ok(current) => current.clone(),
+                Err(error) => {
+                    respond_json(
+                        request,
+                        500,
+                        &serde_json::json!({ "error": error.to_string() }),
+                        origin.as_deref(),
+                    );
+                    return;
+                }
+            };
+
+            if let Some(app_handle) = app_handle {
+                if let Err(error) = app_handle.emit("lingflow://external-selection", report.clone()) {
+                    respond_json(
+                        request,
+                        500,
+                        &serde_json::json!({ "error": error.to_string() }),
+                        origin.as_deref(),
+                    );
+                    return;
+                }
+            }
+
+            respond_json(request, 200, &serde_json::json!({ "ok": true }), origin.as_deref());
+        }
         (&tiny_http::Method::Post, "/http-request") => {
             let mut body = String::new();
             if let Err(error) = request.as_reader().read_to_string(&mut body) {
@@ -1080,4 +1446,3 @@ fn respond_text(request: tiny_http::Request, status: u16, body: &str, origin: Op
         log::warn!("failed to respond from LingFlow local proxy: {error}");
     }
 }
-
