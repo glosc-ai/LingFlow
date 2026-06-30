@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   Copy,
@@ -25,7 +25,6 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { PhysicalPosition, PhysicalSize } from '@tauri-apps/api/dpi';
 import { listen } from '@tauri-apps/api/event';
-import { cursorPosition } from '@tauri-apps/api/window';
 import { WebviewWindow, getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { TranslationScheduler, type AiServiceSourceConfig, type ProviderHttpClient, type TranslatorProvider } from '@lingflow/core';
 import { LingFlowLogo } from '@/components/lingflow-logo';
@@ -90,8 +89,25 @@ type AppSecrets = Pick<
 
 type ServiceHealth = 'unknown' | 'checking' | 'ok' | 'partial' | 'error';
 type ProviderUsage = Partial<Record<TranslatorProvider, number>>;
+type MonthlyProviderUsage = Record<string, ProviderUsage>;
 type ProviderHealth = Partial<Record<TranslatorProvider, ServiceHealth>>;
 type ViewId = 'translate' | 'settings' | 'app-settings' | 'history';
+
+interface ExternalSelectionPayload {
+  readonly text: string;
+  readonly x: number;
+  readonly y: number;
+}
+
+interface SelectionDiagnostics {
+  readonly stage: string;
+  readonly cursorPosition?: { readonly x: number; readonly y: number } | null;
+  readonly processName?: string | null;
+  readonly excluded: boolean;
+  readonly attempts: readonly { readonly strategy: string; readonly ok: boolean; readonly detail: string }[];
+  readonly resultLength?: number | null;
+  readonly error?: string | null;
+}
 
 interface AiModelCatalog {
   readonly error?: string;
@@ -100,10 +116,36 @@ interface AiModelCatalog {
 }
 
 const SETTINGS_STORAGE_KEY = 'lingflow.app.settings';
+const USAGE_STORAGE_KEY = 'lingflow.providerUsage.monthly';
+const HISTORY_STORAGE_KEY = 'lingflow.translation.history';
 const SELECTION_TEXT_STORAGE_KEY = 'lingflow.selection.text';
 const SELECTION_OVERLAY_LABEL = 'selection-overlay';
 const GLOBAL_MOUSE_UP_EVENT = 'lingflow://global-mouse-up';
 const DEFAULT_AI_SOURCE_ID = 'openai-default';
+const PROVIDER_USAGE_EVENT = 'lingflow://provider-usage';
+const EXTERNAL_SELECTION_EVENT = 'lingflow://external-selection';
+const DEFAULT_GLOBAL_SELECTION_EXCLUDED_APPS = [
+  'app.exe',
+  'ApplicationFrameHost.exe',
+  'cmd.exe',
+  'Code.exe',
+  'compmgmt.msc',
+  'conhost.exe',
+  'devenv.exe',
+  'explorer.exe',
+  'mmc.exe',
+  'OpenConsole.exe',
+  'powershell.exe',
+  'pwsh.exe',
+  'SearchHost.exe',
+  'ShellExperienceHost.exe',
+  'StartMenuExperienceHost.exe',
+  'SystemSettings.exe',
+  'taskmgr.exe',
+  'TextInputHost.exe',
+  'WindowsTerminal.exe',
+  'wt.exe',
+] as const;
 
 const DEFAULT_SETTINGS: AppSettings = {
   provider: 'baidu-free',
@@ -112,7 +154,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   localProxyHost: '127.0.0.1',
   localProxyPort: 47631,
   globalSelectionEnabled: false,
-  globalSelectionExcludedApps: ['app.exe', 'Code.exe', 'WindowsTerminal.exe'],
+  globalSelectionExcludedApps: DEFAULT_GLOBAL_SELECTION_EXCLUDED_APPS,
   aiFallbackEnabled: true,
   aiSources: [
     {
@@ -149,6 +191,12 @@ const PROVIDERS: ReadonlyArray<{ id: TranslatorProvider; name: string; group: 'A
   { id: 'tencent', name: '腾讯云 TMT', group: 'Cloud' },
 ];
 
+declare global {
+  interface Window {
+    __lingflowSelectionDiagnostics?: () => Promise<SelectionDiagnostics>;
+  }
+}
+
 const LANGUAGE_OPTIONS = [
   { value: 'zh-CN', label: '中文（简体）' },
   { value: 'en', label: 'English' },
@@ -183,9 +231,104 @@ function LingFlowApp() {
   const globalSelectionBusyRef = useRef(false);
   const lastGlobalSelectionEventAtRef = useRef(0);
 
+  const recordProviderUsage = useCallback((provider: string, characters: number) => {
+    if (!isTranslatorProvider(provider) || !Number.isFinite(characters) || characters <= 0) {
+      return;
+    }
+
+    const normalizedCharacters = Math.floor(characters);
+    setProviderUsage((usage) => {
+      const nextUsage = {
+        ...usage,
+        [provider]: (usage[provider] ?? 0) + normalizedCharacters,
+      };
+      void writeMonthlyProviderUsage(currentUsageMonthKey(), nextUsage);
+      return nextUsage;
+    });
+  }, []);
+
   useEffect(() => {
     document.documentElement.classList.toggle('dark', settings.darkMode);
   }, [settings.darkMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readCurrentMonthlyProviderUsage().then((usage) => {
+      if (!cancelled) {
+        setProviderUsage(usage);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!canUseTauri()) {
+      return;
+    }
+
+    let disposed = false;
+    const unlistenPromise = listen<{ readonly provider: string; readonly characters: number }>(PROVIDER_USAGE_EVENT, (event) => {
+      if (disposed) {
+        return;
+      }
+      recordProviderUsage(event.payload.provider, event.payload.characters);
+    });
+
+    return () => {
+      disposed = true;
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [recordProviderUsage]);
+
+  useEffect(() => {
+    if (!canUseTauri()) {
+      return;
+    }
+
+    let disposed = false;
+    const unlistenPromise = listen<ExternalSelectionPayload>(EXTERNAL_SELECTION_EVENT, (event) => {
+      if (disposed || !settings.globalSelectionEnabled) {
+        return;
+      }
+
+      const text = event.payload.text.trim();
+      if (!text) {
+        return;
+      }
+
+      console.debug('[LingFlow selection] external browser selection received', {
+        characters: text.length,
+        x: event.payload.x,
+        y: event.payload.y,
+      });
+      void showSelectionOverlay(text, event.payload.x + 14, event.payload.y + 16);
+    });
+
+    return () => {
+      disposed = true;
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [settings.globalSelectionEnabled]);
+
+  useEffect(() => {
+    if (!canUseTauri()) {
+      return;
+    }
+
+    window.__lingflowSelectionDiagnostics = async () => {
+      const diagnostics = await invoke<SelectionDiagnostics>('selection_diagnostics');
+      console.table(diagnostics.attempts);
+      console.info('[LingFlow selection diagnostics]', diagnostics);
+      return diagnostics;
+    };
+
+    return () => {
+      delete window.__lingflowSelectionDiagnostics;
+    };
+  }, []);
 
   useEffect(() => {
     if (!settingsLoaded || !settings.globalSelectionEnabled || !canUseTauri()) {
@@ -194,25 +337,33 @@ function LingFlowApp() {
 
     let disposed = false;
     const mainWindow = getCurrentWebviewWindow();
-    const unlistenPromise = listen(GLOBAL_MOUSE_UP_EVENT, () => {
-      if (disposed || globalSelectionBusyRef.current) {
+    const unlistenPromise = listen<{ readonly x: number; readonly y: number }>(GLOBAL_MOUSE_UP_EVENT, (event) => {
+      if (disposed) {
+        console.debug('[LingFlow selection] ignored because listener is disposed', event.payload);
+        return;
+      }
+      if (globalSelectionBusyRef.current) {
+        console.debug('[LingFlow selection] ignored because capture is busy', event.payload);
         return;
       }
 
       const now = Date.now();
       if (now - lastGlobalSelectionEventAtRef.current < 400) {
+        console.debug('[LingFlow selection] ignored by frontend debounce', event.payload);
         return;
       }
       lastGlobalSelectionEventAtRef.current = now;
       globalSelectionBusyRef.current = true;
+      console.debug('[LingFlow selection] mouse-up event received', event.payload);
 
       void mainWindow
         .isFocused()
         .then((isFocused) => {
           if (isFocused) {
+            console.debug('[LingFlow selection] ignored because LingFlow main window is focused');
             return undefined;
           }
-          return detectGlobalSelection(settings.globalSelectionExcludedApps);
+          return detectGlobalSelection(settings.globalSelectionExcludedApps, event.payload);
         })
         .finally(() => {
           globalSelectionBusyRef.current = false;
@@ -229,7 +380,8 @@ function LingFlowApp() {
     let cancelled = false;
 
     async function loadSettings() {
-      const storedSettings = readStoredSettings();
+      const storedSettings = await readStoredSettings();
+      const storedHistory = await readStoredHistory();
       let storedSecrets: Partial<AppSecrets> = {};
 
       if (canUseTauri()) {
@@ -242,6 +394,7 @@ function LingFlowApp() {
 
       if (!cancelled) {
         setSettings(mergeStoredSettings(storedSettings, storedSecrets));
+        setHistory(storedHistory);
         setSettingsLoaded(true);
       }
     }
@@ -258,7 +411,7 @@ function LingFlowApp() {
       return;
     }
 
-    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(omitSecrets(settings)));
+    void writeStoredSettings(omitSecrets(settings));
     if (!canUseTauri()) {
       return;
     }
@@ -314,22 +467,21 @@ function LingFlowApp() {
       });
       setTranslatedText(response.text);
       setStatus(response.cached ? '命中本地缓存' : '翻译完成');
-      setProviderUsage((usage) => ({
-        ...usage,
-        [response.provider]: (usage[response.provider] ?? 0) + response.sourceText.length,
-      }));
-      setHistory((items) => [
-        {
-          id: `${Date.now()}`,
-          source: response.sourceText,
-          target: response.text,
-          provider: response.provider,
-          targetLanguage: response.targetLanguage,
-          timestamp: new Date(),
-          cached: Boolean(response.cached),
-        },
-        ...items,
-      ]);
+      recordProviderUsage(response.provider, response.sourceText.length);
+      const historyItem: HistoryItem = {
+        id: `${Date.now()}`,
+        source: response.sourceText,
+        target: response.text,
+        provider: response.provider,
+        targetLanguage: response.targetLanguage,
+        timestamp: new Date(),
+        cached: Boolean(response.cached),
+      };
+      setHistory((items) => {
+        const nextItems = [historyItem, ...items].slice(0, 500);
+        void writeStoredHistory(nextItems);
+        return nextItems;
+      });
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -565,20 +717,30 @@ function WindowControls() {
   );
 }
 
-async function detectGlobalSelection(excludedApps: readonly string[]) {
+async function detectGlobalSelection(excludedApps: readonly string[], position: { readonly x: number; readonly y: number }) {
   try {
+    const roundedPosition = { x: Math.round(position.x), y: Math.round(position.y) };
     const selectedText = await invoke<string>('capture_foreground_selection', {
       excludedApps,
+      cursorPosition: roundedPosition,
     });
     const normalized = selectedText.trim();
     if (!normalized) {
+      console.debug('[LingFlow selection] capture returned empty text', roundedPosition);
       return;
     }
 
-    const position = await cursorPosition();
+    console.debug('[LingFlow selection] capture succeeded', { characters: normalized.length, position: roundedPosition });
     await showSelectionOverlay(normalized, position.x + 14, position.y + 16);
-  } catch {
-    // Most polling misses mean there is no selectable text in the foreground app.
+  } catch (error) {
+    console.warn('[LingFlow selection] capture failed', error);
+    try {
+      const diagnostics = await invoke<SelectionDiagnostics>('selection_diagnostics');
+      console.table(diagnostics.attempts);
+      console.info('[LingFlow selection diagnostics]', diagnostics);
+    } catch (diagnosticsError) {
+      console.warn('[LingFlow selection] failed to read diagnostics', diagnosticsError);
+    }
   }
 }
 
@@ -651,7 +813,7 @@ function SelectionOverlayApp() {
     let cancelled = false;
 
     async function loadSettings() {
-      const storedSettings = readStoredSettings();
+      const storedSettings = await readStoredSettings();
       let storedSecrets: Partial<AppSecrets> = {};
       try {
         storedSecrets = await invoke<Partial<AppSecrets>>('read_app_secrets');
@@ -879,7 +1041,7 @@ function ServiceStatusCard({
         </Button>
       }
       className="bg-[var(--surface-raised)]"
-      title="服务状态"
+      title="服务状态（本月）"
     >
       <div className="grid gap-2 p-3">
         {configuredProviders.length ? (
@@ -1584,21 +1746,96 @@ function formatCharacterCount(value: number) {
   return `${new Intl.NumberFormat('zh-CN').format(value)} 字符`;
 }
 
+function currentUsageMonthKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+async function readCurrentMonthlyProviderUsage(): Promise<ProviderUsage> {
+  const usage = await readMonthlyProviderUsage();
+  return usage[currentUsageMonthKey()] ?? {};
+}
+
+async function readMonthlyProviderUsage(): Promise<MonthlyProviderUsage> {
+  return (await readJsonAppData<MonthlyProviderUsage>(USAGE_STORAGE_KEY)) ?? {};
+}
+
+async function writeMonthlyProviderUsage(monthKey: string, usage: ProviderUsage) {
+  const monthlyUsage = await readMonthlyProviderUsage();
+  const nextUsage = Object.fromEntries(
+    Object.entries({ ...monthlyUsage, [monthKey]: usage }).filter(([key]) => key === monthKey),
+  ) as MonthlyProviderUsage;
+  await writeJsonAppData(USAGE_STORAGE_KEY, nextUsage);
+}
+
+function isTranslatorProvider(value: string): value is TranslatorProvider {
+  return PROVIDERS.some((provider) => provider.id === value);
+}
+
 function canUseTauri() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
-function readStoredSettings(): Partial<AppSettings> {
-  const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
-  if (!raw) {
-    return {};
+async function readStoredSettings(): Promise<Partial<AppSettings>> {
+  return (await readJsonAppData<Partial<AppSettings>>(SETTINGS_STORAGE_KEY)) ?? {};
+}
+
+async function writeStoredSettings(settings: Partial<AppSettings>) {
+  await writeJsonAppData(SETTINGS_STORAGE_KEY, settings);
+}
+
+async function readStoredHistory(): Promise<HistoryItem[]> {
+  const rawItems = (await readJsonAppData<Array<Omit<HistoryItem, 'timestamp'> & { readonly timestamp: string }>>(HISTORY_STORAGE_KEY)) ?? [];
+  return rawItems.map((item) => ({ ...item, timestamp: new Date(item.timestamp) }));
+}
+
+async function writeStoredHistory(history: readonly HistoryItem[]) {
+  await writeJsonAppData(
+    HISTORY_STORAGE_KEY,
+    history.map((item) => ({ ...item, timestamp: item.timestamp.toISOString() })),
+  );
+}
+
+async function readJsonAppData<T>(key: string): Promise<T | undefined> {
+  if (canUseTauri()) {
+    try {
+      const value = await invoke<string | null>('read_app_data', { key });
+      if (value) {
+        return JSON.parse(value) as T;
+      }
+    } catch (error) {
+      console.warn(`Failed to read LingFlow SQLite data for ${key}`, error);
+    }
+  }
+
+  const legacyValue = window.localStorage.getItem(key);
+  if (!legacyValue) {
+    return undefined;
   }
 
   try {
-    return JSON.parse(raw) as Partial<AppSettings>;
+    const parsed = JSON.parse(legacyValue) as T;
+    if (canUseTauri()) {
+      await writeJsonAppData(key, parsed);
+      window.localStorage.removeItem(key);
+    }
+    return parsed;
   } catch {
-    window.localStorage.removeItem(SETTINGS_STORAGE_KEY);
-    return {};
+    window.localStorage.removeItem(key);
+    return undefined;
+  }
+}
+
+async function writeJsonAppData(key: string, value: unknown) {
+  const serialized = JSON.stringify(value);
+  if (!canUseTauri()) {
+    window.localStorage.setItem(key, serialized);
+    return;
+  }
+
+  try {
+    await invoke('write_app_data', { key, value: serialized });
+  } catch (error) {
+    console.warn(`Failed to write LingFlow SQLite data for ${key}`, error);
   }
 }
 
@@ -1767,4 +2004,5 @@ function normalizeBody(body?: BodyInit | null) {
 
   throw new Error('Unsupported Tauri HTTP request body type');
 }
+
 
