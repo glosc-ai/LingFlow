@@ -3,6 +3,7 @@
     fs,
     mem::size_of,
     path::PathBuf,
+    process::Command,
     ptr::null_mut,
     sync::{mpsc, Arc, Mutex, OnceLock, RwLock},
     thread,
@@ -13,19 +14,22 @@ use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size};
 use windows::{
     core::{BOOL, Interface},
     Win32::{
-        Foundation::{CloseHandle, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{CloseHandle, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         System::{
             Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED},
-            DataExchange::{CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard},
+            DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, SetClipboardData},
             Diagnostics::ToolHelp::{
                 CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
                 TH32CS_SNAPPROCESS,
             },
-            Memory::{GlobalLock, GlobalSize, GlobalUnlock},
+            Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE},
             Threading::{GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION},
         },
         UI::{
             Accessibility::{CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId},
+            Input::KeyboardAndMouse::{
+                SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL, VK_C,
+            },
             WindowsAndMessaging::{
                 CallNextHookEx, GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetWindowThreadProcessId,
                 GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, SetWindowsHookExW, UnhookWindowsHookEx,
@@ -116,6 +120,44 @@ struct AppDataStoreState {
     connection: Arc<Mutex<Option<Connection>>>,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAsset {
+    name: String,
+    browser_download_url: String,
+    size: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInfo {
+    current_version: String,
+    latest_version: String,
+    has_update: bool,
+    release_url: String,
+    release_name: Option<String>,
+    published_at: Option<String>,
+    body: Option<String>,
+    assets: Vec<UpdateAsset>,
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    name: Option<String>,
+    html_url: String,
+    published_at: Option<String>,
+    body: Option<String>,
+    assets: Vec<GitHubReleaseAsset>,
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubReleaseAsset {
+    name: String,
+    browser_download_url: String,
+    size: u64,
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let proxy_state = LocalProxyState {
@@ -152,7 +194,9 @@ pub fn run() {
             selection_diagnostics,
             set_overlay_no_activate,
             list_running_process_names,
-            foreground_process_name
+            foreground_process_name,
+            check_for_updates,
+            open_external_url
         ])
         .setup(move |app| {
             let connection = open_app_data_store(app.handle()).map_err(|error| {
@@ -207,6 +251,35 @@ fn center_main_window_at_screen_ratio(app_handle: &tauri::AppHandle, ratio: f64)
     Ok(())
 }
 
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let latest_parts = parse_version_parts(latest);
+    let current_parts = parse_version_parts(current);
+    for index in 0..latest_parts.len().max(current_parts.len()) {
+        let latest_part = *latest_parts.get(index).unwrap_or(&0);
+        let current_part = *current_parts.get(index).unwrap_or(&0);
+        if latest_part > current_part {
+            return true;
+        }
+        if latest_part < current_part {
+            return false;
+        }
+    }
+    false
+}
+
+fn parse_version_parts(value: &str) -> Vec<u64> {
+    value
+        .split(['.', '-', '+'])
+        .map(|part| {
+            part.chars()
+                .take_while(|character| character.is_ascii_digit())
+                .collect::<String>()
+        })
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<u64>().ok())
+        .collect()
+}
+
 #[tauri::command]
 fn read_clipboard_text() -> Result<String, String> {
     read_clipboard_text_native()
@@ -218,14 +291,79 @@ fn foreground_process_name() -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn check_for_updates() -> Result<UpdateInfo, String> {
+    let release = reqwest::Client::new()
+        .get("https://api.github.com/repos/glosc-ai/LingFlow/releases/latest")
+        .header("User-Agent", "LingFlow")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if !release.status().is_success() {
+        return Err(format!("GitHub Releases request failed with HTTP {}", release.status()));
+    }
+
+    let release_text = release.text().await.map_err(|error| error.to_string())?;
+    let release = serde_json::from_str::<GitHubRelease>(&release_text).map_err(|error| error.to_string())?;
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    let latest_version = release.tag_name.trim_start_matches('v').to_string();
+    let has_update = is_newer_version(&latest_version, &current_version);
+
+    Ok(UpdateInfo {
+        current_version,
+        latest_version,
+        has_update,
+        release_url: release.html_url,
+        release_name: release.name,
+        published_at: release.published_at,
+        body: release.body,
+        assets: release
+            .assets
+            .into_iter()
+            .map(|asset| UpdateAsset {
+                name: asset.name,
+                browser_download_url: asset.browser_download_url,
+                size: asset.size,
+            })
+            .collect(),
+    })
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err("Only http and https URLs can be opened".to_string());
+    }
+
+    Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", trimmed])
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn capture_foreground_selection(
     state: tauri::State<'_, SelectionCaptureState>,
     excluded_apps: Vec<String>,
     cursor_position: Option<ScreenPoint>,
+    clipboard_fallback_enabled: Option<bool>,
+    clipboard_fallback_apps: Option<Vec<String>>,
 ) -> Result<String, String> {
     let inner = state.inner.clone();
     let diagnostics = state.diagnostics.clone();
-    tauri::async_runtime::spawn_blocking(move || capture_foreground_selection_with_state(inner, diagnostics, excluded_apps, cursor_position))
+    tauri::async_runtime::spawn_blocking(move || {
+        capture_foreground_selection_with_state(
+            inner,
+            diagnostics,
+            excluded_apps,
+            cursor_position,
+            clipboard_fallback_enabled.unwrap_or(false),
+            clipboard_fallback_apps.unwrap_or_default(),
+        )
+    })
         .await
         .map_err(|error| error.to_string())?
 }
@@ -235,7 +373,7 @@ async fn read_foreground_selected_text(
     state: tauri::State<'_, SelectionCaptureState>,
     excluded_apps: Vec<String>,
 ) -> Result<String, String> {
-    capture_foreground_selection(state, excluded_apps, None).await
+    capture_foreground_selection(state, excluded_apps, None, Some(false), Some(Vec::new())).await
 }
 
 #[tauri::command]
@@ -301,6 +439,8 @@ fn capture_foreground_selection_with_state(
     diagnostics: Arc<Mutex<SelectionDiagnostics>>,
     excluded_apps: Vec<String>,
     cursor_position: Option<ScreenPoint>,
+    clipboard_fallback_enabled: bool,
+    clipboard_fallback_apps: Vec<String>,
 ) -> Result<String, String> {
     write_selection_diagnostics(&diagnostics, SelectionDiagnostics {
         stage: "started".to_string(),
@@ -336,7 +476,13 @@ fn capture_foreground_selection_with_state(
         guard.last_capture = Some(Instant::now());
     }
 
-    let result = capture_foreground_selection_inner(&diagnostics, &excluded_apps, cursor_position);
+    let result = capture_foreground_selection_inner(
+        &diagnostics,
+        &excluded_apps,
+        cursor_position,
+        clipboard_fallback_enabled,
+        &clipboard_fallback_apps,
+    );
     if let Err(error) = &result {
         update_selection_diagnostics(&diagnostics, |current| {
             current.stage = "failed".to_string();
@@ -350,6 +496,8 @@ fn capture_foreground_selection_inner(
     diagnostics: &Arc<Mutex<SelectionDiagnostics>>,
     excluded_apps: &[String],
     cursor_position: Option<ScreenPoint>,
+    clipboard_fallback_enabled: bool,
+    clipboard_fallback_apps: &[String],
 ) -> Result<String, String> {
     let process_name = foreground_process_name_inner()?;
     update_selection_diagnostics(diagnostics, |current| {
@@ -390,6 +538,29 @@ fn capture_foreground_selection_inner(
             return Ok(text);
         }
         Err(error) => push_selection_attempt(diagnostics, "standard-edit", false, error),
+    }
+
+    let can_use_clipboard_fallback =
+        clipboard_fallback_enabled && (clipboard_fallback_apps.is_empty() || is_excluded_process(&process_name, clipboard_fallback_apps));
+    if can_use_clipboard_fallback {
+        match selected_text_from_clipboard_fallback() {
+            Ok(text) => {
+                push_selection_attempt(diagnostics, "clipboard-fallback", true, format!("{} chars", text.len()));
+                update_selection_diagnostics(diagnostics, |current| {
+                    current.stage = "success".to_string();
+                    current.result_length = Some(text.len());
+                });
+                return Ok(text);
+            }
+            Err(error) => push_selection_attempt(diagnostics, "clipboard-fallback", false, error),
+        }
+    } else if clipboard_fallback_enabled {
+        push_selection_attempt(
+            diagnostics,
+            "clipboard-fallback",
+            false,
+            format!("{process_name} is not in clipboard fallback allow list"),
+        );
     }
 
     Err("No selected text was found through Windows UI Automation".to_string())
@@ -782,6 +953,51 @@ fn selected_text_from_standard_edit() -> Result<String, String> {
     normalize_selected_text(String::from_utf16_lossy(&utf16[start..end]))
 }
 
+fn selected_text_from_clipboard_fallback() -> Result<String, String> {
+    let original_clipboard = read_clipboard_text_native().unwrap_or_default();
+    send_copy_shortcut_native()?;
+    thread::sleep(Duration::from_millis(120));
+
+    let selected_text = read_clipboard_text_native().unwrap_or_default();
+    if !original_clipboard.is_empty() && selected_text != original_clipboard {
+        if let Err(error) = set_clipboard_text_native(&original_clipboard) {
+            log::warn!("failed to restore text clipboard after compatibility fallback: {error}");
+        }
+    }
+
+    normalize_selected_text(selected_text)
+}
+
+fn send_copy_shortcut_native() -> Result<(), String> {
+    let inputs = [
+        keyboard_input(VK_CONTROL.0 as u16, false),
+        keyboard_input(VK_C.0 as u16, false),
+        keyboard_input(VK_C.0 as u16, true),
+        keyboard_input(VK_CONTROL.0 as u16, true),
+    ];
+    let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+    if sent == inputs.len() as u32 {
+        Ok(())
+    } else {
+        Err("Failed to send Ctrl+C compatibility fallback".to_string())
+    }
+}
+
+fn keyboard_input(vk: u16, key_up: bool) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
+                wScan: 0,
+                dwFlags: if key_up { KEYEVENTF_KEYUP } else { Default::default() },
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
 fn read_clipboard_text_native() -> Result<String, String> {
     let _clipboard = ClipboardSession::open()?;
     let available = unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT_FORMAT).is_ok() };
@@ -810,6 +1026,30 @@ fn read_clipboard_text_native() -> Result<String, String> {
         let _ = GlobalUnlock(global);
     }
     Ok(text)
+}
+
+fn set_clipboard_text_native(value: &str) -> Result<(), String> {
+    let _clipboard = ClipboardSession::open()?;
+    unsafe { EmptyClipboard() }.map_err(|error| error.message().to_string())?;
+    if value.is_empty() {
+        return Ok(());
+    }
+
+    let mut utf16 = value.encode_utf16().collect::<Vec<u16>>();
+    utf16.push(0);
+    let byte_len = utf16.len() * size_of::<u16>();
+    let handle = unsafe { GlobalAlloc(GMEM_MOVEABLE, byte_len) }
+        .map_err(|error| error.message().to_string())?;
+    let ptr = unsafe { GlobalLock(handle) } as *mut u16;
+    if ptr.is_null() {
+        return Err("Failed to lock clipboard allocation".to_string());
+    }
+    unsafe {
+        ptr.copy_from_nonoverlapping(utf16.as_ptr(), utf16.len());
+        let _ = GlobalUnlock(handle);
+        SetClipboardData(CF_UNICODETEXT_FORMAT, Some(HANDLE(handle.0))).map_err(|error| error.message().to_string())?;
+    }
+    Ok(())
 }
 
 struct ClipboardSession;

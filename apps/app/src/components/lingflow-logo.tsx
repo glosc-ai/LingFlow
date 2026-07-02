@@ -36,7 +36,7 @@ export function LingFlowLogo({ className = '', showWordmark = false }: LingFlowL
           </linearGradient>
         </defs>
       </svg>
-      {showWordmark ? <span className="font-semibold">LingFlow</span> : null}
+      {showWordmark ? <span className="font-semibold">灵流</span> : null}
     </span>
   );
 }

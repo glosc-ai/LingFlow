@@ -3,6 +3,7 @@ import {
   ArrowLeftRight,
   Copy,
   Database,
+  ExternalLink,
   Eraser,
   GripVertical,
   History,
@@ -35,10 +36,12 @@ interface AppSettings {
   readonly provider: TranslatorProvider;
   readonly targetLanguage: string;
   readonly darkMode: boolean;
+  readonly onboardingCompleted: boolean;
   readonly localProxyHost: string;
   readonly localProxyPort: number;
   readonly globalSelectionEnabled: boolean;
   readonly globalSelectionExcludedApps: readonly string[];
+  readonly globalSelectionClipboardFallbackEnabled: boolean;
   readonly aiFallbackEnabled: boolean;
   readonly aiSources: readonly AiServiceSourceConfig[];
   readonly aiBaseUrl?: string;
@@ -109,6 +112,23 @@ interface SelectionDiagnostics {
   readonly error?: string | null;
 }
 
+interface UpdateAsset {
+  readonly name: string;
+  readonly browserDownloadUrl: string;
+  readonly size: number;
+}
+
+interface UpdateInfo {
+  readonly currentVersion: string;
+  readonly latestVersion: string;
+  readonly hasUpdate: boolean;
+  readonly releaseUrl: string;
+  readonly releaseName?: string | null;
+  readonly publishedAt?: string | null;
+  readonly body?: string | null;
+  readonly assets: readonly UpdateAsset[];
+}
+
 interface AiModelCatalog {
   readonly error?: string;
   readonly loading: boolean;
@@ -151,16 +171,18 @@ const DEFAULT_SETTINGS: AppSettings = {
   provider: 'baidu-free',
   targetLanguage: 'zh-CN',
   darkMode: false,
+  onboardingCompleted: false,
   localProxyHost: '127.0.0.1',
   localProxyPort: 47631,
   globalSelectionEnabled: false,
   globalSelectionExcludedApps: DEFAULT_GLOBAL_SELECTION_EXCLUDED_APPS,
+  globalSelectionClipboardFallbackEnabled: false,
   aiFallbackEnabled: true,
   aiSources: [
     {
       id: DEFAULT_AI_SOURCE_ID,
       name: 'OpenAI Compatible',
-      baseUrl: 'https://api.openai.com',
+      baseUrl: 'https://one.gloscai.com',
       apiKey: '',
       models: ['gpt-4.1-mini'],
       enabled: true,
@@ -226,10 +248,12 @@ function LingFlowApp() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historySearch, setHistorySearch] = useState('');
   const [providerUsage, setProviderUsage] = useState<ProviderUsage>({});
+  const [usageMonth, setUsageMonth] = useState(currentUsageMonthKey());
   const [providerHealth, setProviderHealth] = useState<ProviderHealth>({});
   const [isTestingProviders, setIsTestingProviders] = useState(false);
   const globalSelectionBusyRef = useRef(false);
   const lastGlobalSelectionEventAtRef = useRef(0);
+  const usageMonthRef = useRef(currentUsageMonthKey());
 
   const recordProviderUsage = useCallback((provider: string, characters: number) => {
     if (!isTranslatorProvider(provider) || !Number.isFinite(characters) || characters <= 0) {
@@ -237,12 +261,20 @@ function LingFlowApp() {
     }
 
     const normalizedCharacters = Math.floor(characters);
+    const monthKey = currentUsageMonthKey();
+    const isNewMonth = usageMonthRef.current !== monthKey;
+    if (isNewMonth) {
+      usageMonthRef.current = monthKey;
+      setUsageMonth(monthKey);
+    }
+
     setProviderUsage((usage) => {
+      const baseUsage = isNewMonth ? {} : usage;
       const nextUsage = {
-        ...usage,
-        [provider]: (usage[provider] ?? 0) + normalizedCharacters,
+        ...baseUsage,
+        [provider]: (baseUsage[provider] ?? 0) + normalizedCharacters,
       };
-      void writeMonthlyProviderUsage(currentUsageMonthKey(), nextUsage);
+      void writeMonthlyProviderUsage(monthKey, nextUsage);
       return nextUsage;
     });
   }, []);
@@ -255,6 +287,9 @@ function LingFlowApp() {
     let cancelled = false;
     void readCurrentMonthlyProviderUsage().then((usage) => {
       if (!cancelled) {
+        const monthKey = currentUsageMonthKey();
+        usageMonthRef.current = monthKey;
+        setUsageMonth(monthKey);
         setProviderUsage(usage);
       }
     });
@@ -363,7 +398,7 @@ function LingFlowApp() {
             console.debug('[LingFlow selection] ignored because LingFlow main window is focused');
             return undefined;
           }
-          return detectGlobalSelection(settings.globalSelectionExcludedApps, event.payload);
+          return detectGlobalSelection(settings, event.payload);
         })
         .finally(() => {
           globalSelectionBusyRef.current = false;
@@ -374,7 +409,7 @@ function LingFlowApp() {
       disposed = true;
       void unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [settings.globalSelectionEnabled, settings.globalSelectionExcludedApps, settingsLoaded]);
+  }, [settings, settingsLoaded]);
 
   useEffect(() => {
     let cancelled = false;
@@ -589,6 +624,23 @@ function LingFlowApp() {
     }
   }
 
+  function completeOnboarding(nextView: ViewId = 'translate') {
+    setSettings({ ...settings, onboardingCompleted: true });
+    setActiveView(nextView);
+  }
+
+  if (settingsLoaded && !settings.onboardingCompleted) {
+    return (
+      <OnboardingScreen
+        darkMode={settings.darkMode}
+        onConfigureProvider={() => completeOnboarding('settings')}
+        onOpenKeyPage={() => void openExternalUrl('https://one.gloscai.com/keys')}
+        onStart={() => completeOnboarding('translate')}
+        onToggleDarkMode={() => setSettings({ ...settings, darkMode: !settings.darkMode })}
+      />
+    );
+  }
+
   return (
     <main className="app-shell bg-[var(--bg)] text-[var(--fg)]">
       <header className="topbar">
@@ -686,6 +738,7 @@ function LingFlowApp() {
           selectedProvider={settings.provider}
           settings={settings}
           usage={providerUsage}
+          usageMonth={usageMonth}
         />
         <RecentTranslations history={history} onUse={(item) => {
           setSourceText(item.source);
@@ -717,12 +770,88 @@ function WindowControls() {
   );
 }
 
-async function detectGlobalSelection(excludedApps: readonly string[], position: { readonly x: number; readonly y: number }) {
+function OnboardingScreen({
+  darkMode,
+  onConfigureProvider,
+  onOpenKeyPage,
+  onStart,
+  onToggleDarkMode,
+}: {
+  readonly darkMode: boolean;
+  readonly onConfigureProvider: () => void;
+  readonly onOpenKeyPage: () => void;
+  readonly onStart: () => void;
+  readonly onToggleDarkMode: () => void;
+}) {
+  return (
+    <main className="onboarding-shell bg-[var(--bg)] text-[var(--fg)]">
+      <header className="topbar">
+        <LingFlowLogo showWordmark />
+        <div className="topbar-actions">
+          <Button aria-label="切换主题" onClick={onToggleDarkMode} size="icon" variant="ghost">
+            {darkMode ? <Sun size={17} /> : <Moon size={17} />}
+          </Button>
+          <WindowControls />
+        </div>
+      </header>
+      <section className="onboarding-content">
+        <div className="onboarding-hero">
+          <LingFlowLogo className="onboarding-logo" />
+          <p className="text-sm font-semibold text-[var(--primary)]">欢迎使用灵流</p>
+          <h1>让翻译像水流一样融入阅读</h1>
+          <p className="onboarding-copy">
+            灵流会把桌面端、浏览器扩展和翻译服务源连接在一起。完成首次设置后，你可以直接使用文本翻译、网页双语翻译和全局划词悬浮窗。
+          </p>
+          <div className="onboarding-actions">
+            <Button onClick={onStart} variant="primary">
+              <Play size={16} />
+              开始使用
+            </Button>
+            <Button onClick={onConfigureProvider} variant="secondary">
+              <Settings size={16} />
+              配置服务源
+            </Button>
+          </div>
+        </div>
+        <div className="onboarding-steps">
+          <article className="onboarding-step">
+            <span>1</span>
+            <div>
+              <h2>配置翻译服务</h2>
+              <p>推荐先配置 AI 服务源，默认 Base URL 已使用 https://one.gloscai.com。</p>
+              <button className="onboarding-link" onClick={onOpenKeyPage} type="button">
+                没有 Key？现在获取
+              </button>
+            </div>
+          </article>
+          <article className="onboarding-step">
+            <span>2</span>
+            <div>
+              <h2>启动浏览器扩展</h2>
+              <p>扩展会通过本地代理读取桌面端配置，不需要在浏览器里重复保存密钥。</p>
+            </div>
+          </article>
+          <article className="onboarding-step">
+            <span>3</span>
+            <div>
+              <h2>开启全局划词</h2>
+              <p>在软件设置中开启全局划词后，选中文本即可唤起灵流悬浮翻译窗。</p>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+async function detectGlobalSelection(settings: AppSettings, position: { readonly x: number; readonly y: number }) {
   try {
     const roundedPosition = { x: Math.round(position.x), y: Math.round(position.y) };
     const selectedText = await invoke<string>('capture_foreground_selection', {
-      excludedApps,
+      excludedApps: settings.globalSelectionExcludedApps,
       cursorPosition: roundedPosition,
+      clipboardFallbackEnabled: settings.globalSelectionClipboardFallbackEnabled,
+      clipboardFallbackApps: [],
     });
     const normalized = selectedText.trim();
     if (!normalized) {
@@ -1002,7 +1131,7 @@ function StatusStrip({ detail, status }: { readonly detail: string; readonly sta
     <div className="status-strip">
       <span className="status-orb" />
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold">LingFlow Translation Service</p>
+        <p className="text-sm font-semibold">灵流翻译服务</p>
         <p className="truncate text-xs text-[var(--muted)]">{detail}</p>
       </div>
       <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
@@ -1021,6 +1150,7 @@ function ServiceStatusCard({
   selectedProvider,
   settings,
   usage,
+  usageMonth,
 }: {
   readonly health: ProviderHealth;
   readonly isTesting: boolean;
@@ -1029,6 +1159,7 @@ function ServiceStatusCard({
   readonly selectedProvider: TranslatorProvider;
   readonly settings: AppSettings;
   readonly usage: ProviderUsage;
+  readonly usageMonth: string;
 }) {
   const configuredProviders = getConfiguredProviders(settings);
 
@@ -1041,7 +1172,7 @@ function ServiceStatusCard({
         </Button>
       }
       className="bg-[var(--surface-raised)]"
-      title="服务状态（本月）"
+      title={`服务状态（${usageMonth}）`}
     >
       <div className="grid gap-2 p-3">
         {configuredProviders.length ? (
@@ -1231,6 +1362,9 @@ function AppSettingsView({
 }) {
   const [runningProcesses, setRunningProcesses] = useState<readonly string[]>([]);
   const [isLoadingProcesses, setIsLoadingProcesses] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updateError, setUpdateError] = useState('');
 
   async function loadRunningProcesses() {
     if (!canUseTauri()) {
@@ -1245,21 +1379,43 @@ function AppSettingsView({
     }
   }
 
-  function toggleExcludedProcess(processName: string, checked: boolean) {
+  function updateProcessList(current: readonly string[], processName: string, checked: boolean) {
     const normalized = processName.trim();
     if (!normalized) {
+      return current;
+    }
+
+    const exists = current.some((item) => item.toLowerCase() === normalized.toLowerCase());
+    if (checked) {
+      return exists ? current : [...current, normalized];
+    }
+    return current.filter((item) => item.toLowerCase() !== normalized.toLowerCase());
+  }
+
+  function toggleExcludedProcess(processName: string, checked: boolean) {
+    const next = updateProcessList(settings.globalSelectionExcludedApps.filter(Boolean), processName, checked);
+    onSettingsChange({ ...settings, globalSelectionExcludedApps: next });
+  }
+
+  async function checkUpdates() {
+    if (!canUseTauri()) {
       return;
     }
 
-    const current = settings.globalSelectionExcludedApps.filter(Boolean);
-    const exists = current.some((item) => item.toLowerCase() === normalized.toLowerCase());
-    const next = checked
-      ? exists
-        ? current
-        : [...current, normalized]
-      : current.filter((item) => item.toLowerCase() !== normalized.toLowerCase());
-    onSettingsChange({ ...settings, globalSelectionExcludedApps: next });
+    setIsCheckingUpdate(true);
+    setUpdateError('');
+    try {
+      setUpdateInfo(await invoke<UpdateInfo>('check_for_updates'));
+    } catch (error) {
+      setUpdateError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsCheckingUpdate(false);
+    }
   }
+
+  useEffect(() => {
+    void checkUpdates();
+  }, []);
 
   return (
     <div className="settings-grid">
@@ -1301,7 +1457,15 @@ function AppSettingsView({
       <Card className="settings-wide" title="全局划词">
         <div className="grid gap-4 p-5">
           <Toggle checked={settings.globalSelectionEnabled} label="启用全局划词" onChange={(checked) => onSettingsChange({ ...settings, globalSelectionEnabled: checked })} />
-          <Field hint="一行一个进程名，例如 Code.exe、chrome.exe。命中后不会读取该软件中的选中文本。" label="进程名">
+          <Toggle
+            checked={settings.globalSelectionClipboardFallbackEnabled}
+            label="启用兼容剪贴板兜底"
+            onChange={(checked) => onSettingsChange({ ...settings, globalSelectionClipboardFallbackEnabled: checked })}
+          />
+          <p className="text-xs leading-5 text-[var(--muted)]">
+            仅当 UI Automation 无法读取且前台进程未命中下方黑名单时，才会临时发送 Ctrl+C 读取文本。
+          </p>
+          <Field hint="一行一个进程名，例如 explorer.exe、Code.exe、chrome.exe。命中后不会读取该软件中的选中文本，也不会触发兼容兜底。" label="进程黑名单">
             <textarea
               className="settings-textarea"
               onChange={(event) =>
@@ -1321,7 +1485,7 @@ function AppSettingsView({
               {isLoadingProcesses ? <RefreshCcw className="animate-spin" size={14} /> : <RefreshCcw size={14} />}
               加载当前进程
             </Button>
-            <span className="text-xs text-[var(--muted)]">勾选后会加入排除列表。</span>
+            <span className="text-xs text-[var(--muted)]">勾选后会加入进程黑名单。</span>
           </div>
           {runningProcesses.length ? (
             <div className="process-picker">
@@ -1336,6 +1500,40 @@ function AppSettingsView({
               })}
             </div>
           ) : null}
+        </div>
+      </Card>
+
+      <Card className="settings-wide" title="在线更新">
+        <div className="grid gap-4 p-5 text-sm">
+          <Button disabled={isCheckingUpdate} onClick={() => void checkUpdates()} variant="secondary">
+            {isCheckingUpdate ? <RefreshCcw className="animate-spin" size={16} /> : <RefreshCcw size={16} />}
+            检查更新
+          </Button>
+          {updateInfo ? (
+            <div className="grid gap-2 text-xs leading-5 text-[var(--muted)]">
+              <p>当前版本：{updateInfo.currentVersion}</p>
+              <p>最新版本：{updateInfo.latestVersion}</p>
+              <p className={updateInfo.hasUpdate ? 'text-[var(--primary)]' : 'text-[var(--muted)]'}>
+                {updateInfo.hasUpdate ? '发现新版本，可以前往 GitHub Releases 下载。' : '当前已经是最新版本。'}
+              </p>
+              <a className="inline-flex items-center gap-2 text-[var(--primary)]" href={updateInfo.releaseUrl} rel="noreferrer" target="_blank">
+                <ExternalLink size={14} />
+                打开发布页面
+              </a>
+              {updateInfo.assets.length ? (
+                <div className="grid gap-1">
+                  {updateInfo.assets.slice(0, 4).map((asset) => (
+                    <a className="truncate text-[var(--primary)]" href={asset.browserDownloadUrl} key={asset.browserDownloadUrl} rel="noreferrer" target="_blank">
+                      {asset.name}
+                    </a>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-xs leading-5 text-[var(--muted)]">从 GitHub Releases 自动获取 LingFlow 最新版本信息。</p>
+          )}
+          {updateError ? <p className="text-xs leading-5 text-[var(--danger)]">{updateError}</p> : null}
         </div>
       </Card>
     </div>
@@ -1446,7 +1644,7 @@ function AiProviderConfigEditor({ onSettingsChange, settings }: { readonly onSet
         {
           id: `ai-source-${Date.now()}`,
           name: 'AI Service',
-          baseUrl: '',
+          baseUrl: 'https://one.gloscai.com',
           apiKey: '',
           models: [],
           enabled: true,
@@ -1540,51 +1738,80 @@ function AiProviderConfigEditor({ onSettingsChange, settings }: { readonly onSet
             }}
           >
             <div className="ai-source-card-header">
-              <GripVertical aria-hidden size={18} />
+              <span className="ai-source-drag-handle">
+                <GripVertical aria-hidden size={18} />
+              </span>
               <TextInput aria-label="AI 服务源名称" onChange={(event) => updateSource(source.id, { name: event.currentTarget.value })} value={source.name} />
-              <Toggle checked={source.enabled !== false} label="启用" onChange={(checked) => updateSource(source.id, { enabled: checked })} />
-              <Button aria-label="删除服务源" onClick={() => removeSource(source.id)} size="icon" variant="ghost">
-                <X size={16} />
-              </Button>
+              <div className="ai-source-card-actions">
+                <Toggle checked={source.enabled !== false} label="启用" onChange={(checked) => updateSource(source.id, { enabled: checked })} />
+                <Button aria-label="删除服务源" onClick={() => removeSource(source.id)} size="icon" variant="ghost">
+                  <X size={16} />
+                </Button>
+              </div>
             </div>
             <div className="ai-source-fields">
               <Field label="Base URL">
-                <TextInput onChange={(event) => updateSource(source.id, { baseUrl: event.currentTarget.value })} placeholder="https://api.openai.com" value={source.baseUrl} />
+                <TextInput onChange={(event) => updateSource(source.id, { baseUrl: event.currentTarget.value })} placeholder="https://one.gloscai.com" value={source.baseUrl} />
               </Field>
               <Field label="API Key">
                 <TextInput onChange={(event) => updateSource(source.id, { apiKey: event.currentTarget.value })} type="password" value={source.apiKey} />
+                <a
+                  className="text-[11px] leading-5 text-[var(--primary)]"
+                  href="https://one.gloscai.com/keys"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void openExternalUrl('https://one.gloscai.com/keys');
+                  }}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  没有 Key？现在获取
+                </a>
               </Field>
-              <Field hint="填写 Base URL 和 API Key 后获取模型，再从下拉栏添加。已选模型顺序即回退顺序。" label="模型">
-                <div className="ai-model-select-row">
-                  <SelectInput
-                    disabled={!modelCatalogs[source.id]?.models.length}
-                    onChange={(event) => {
-                      addModel(source, event.currentTarget.value);
-                      event.currentTarget.value = '';
-                    }}
-                    value=""
-                  >
-                    <option value="">选择模型</option>
-                    {(modelCatalogs[source.id]?.models ?? []).map((model) => (
-                      <option disabled={source.models.includes(model)} key={model} value={model}>
-                        {model}
-                      </option>
-                    ))}
-                  </SelectInput>
-                  <Button disabled={!source.baseUrl.trim() || !source.apiKey.trim() || modelCatalogs[source.id]?.loading} onClick={() => void fetchModels(source)} size="sm" variant="secondary">
-                    {modelCatalogs[source.id]?.loading ? <RefreshCcw className="animate-spin" size={14} /> : <RefreshCcw size={14} />}
-                    获取模型
-                  </Button>
+              <div className="ai-model-area">
+                <Field hint="填写 Base URL 和 API Key 后获取模型，再从下拉栏添加。" label="模型">
+                  <div className="ai-model-select-row">
+                    <SelectInput
+                      disabled={!modelCatalogs[source.id]?.models.length}
+                      onChange={(event) => {
+                        addModel(source, event.currentTarget.value);
+                        event.currentTarget.value = '';
+                      }}
+                      value=""
+                    >
+                      <option value="">选择模型</option>
+                      {(modelCatalogs[source.id]?.models ?? []).map((model) => (
+                        <option disabled={source.models.includes(model)} key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </SelectInput>
+                    <Button disabled={!source.baseUrl.trim() || !source.apiKey.trim() || modelCatalogs[source.id]?.loading} onClick={() => void fetchModels(source)} size="sm" variant="secondary">
+                      {modelCatalogs[source.id]?.loading ? <RefreshCcw className="animate-spin" size={14} /> : <RefreshCcw size={14} />}
+                      获取模型
+                    </Button>
+                  </div>
+                  {modelCatalogs[source.id]?.error ? <span className="text-[11px] leading-5 text-[var(--danger)]">{modelCatalogs[source.id]?.error}</span> : null}
+                </Field>
+                <div className="ai-model-selected-panel">
+                  <div className="ai-model-selected-header">
+                    <span>已选模型</span>
+                    <span>{source.models.length} 个</span>
+                  </div>
+                  {source.models.length ? (
+                    <div className="ai-model-chip-row">
+                      {source.models.map((model, index) => (
+                        <button className="ai-model-chip" key={model} onClick={() => updateSource(source.id, { models: source.models.filter((item) => item !== model) })} type="button">
+                          <span className="ai-model-chip-index">{index + 1}</span>
+                          <span className="min-w-0 truncate">{model}</span>
+                          <X size={12} />
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="ai-model-empty">尚未选择模型，获取模型后从左侧下拉栏添加。</p>
+                  )}
                 </div>
-                {modelCatalogs[source.id]?.error ? <span className="text-[11px] leading-5 text-[var(--danger)]">{modelCatalogs[source.id]?.error}</span> : null}
-              </Field>
-              <div className="ai-model-chip-row">
-                {source.models.map((model) => (
-                  <button className="ai-model-chip" key={model} onClick={() => updateSource(source.id, { models: source.models.filter((item) => item !== model) })} type="button">
-                    <span>{model}</span>
-                    <X size={12} />
-                  </button>
-                ))}
               </div>
             </div>
           </article>
@@ -1622,7 +1849,7 @@ function HistoryView({
               <p className="truncate text-sm">{item.source}</p>
               <p className="truncate text-sm">{item.target}</p>
               <div className="text-right text-xs text-[var(--muted)]">
-                <p>{formatTime(item.timestamp)}</p>
+                <p>{formatDateTime(item.timestamp)}</p>
                 <p>{item.cached ? '缓存' : '新译文'}</p>
               </div>
             </button>
@@ -1646,7 +1873,7 @@ function RecentTranslations({ history, onUse }: { readonly history: readonly His
             <button className="grid gap-1 rounded-xl p-2 text-left text-xs hover:bg-[var(--primary-ghost)]" key={item.id} onClick={() => onUse(item)} type="button">
               <span className="font-mono text-[var(--primary)]">{`AUTO -> ${item.targetLanguage}`}</span>
               <span className="line-clamp-2 text-[var(--fg)]">{item.source}</span>
-              <span className="text-[var(--muted)]">{formatTime(item.timestamp)}</span>
+              <span className="text-[var(--muted)]">{formatDateTime(item.timestamp)}</span>
             </button>
           ))
         ) : (
@@ -1738,8 +1965,14 @@ function labelForLanguage(value: string) {
   return LANGUAGE_OPTIONS.find((language) => language.value === value)?.label ?? value;
 }
 
-function formatTime(value: Date) {
-  return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(value);
+function formatDateTime(value: Date) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(value);
 }
 
 function formatCharacterCount(value: number) {
@@ -1773,6 +2006,14 @@ function isTranslatorProvider(value: string): value is TranslatorProvider {
 
 function canUseTauri() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+async function openExternalUrl(url: string) {
+  if (canUseTauri()) {
+    await invoke('open_external_url', { url });
+    return;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 async function readStoredSettings(): Promise<Partial<AppSettings>> {
@@ -1868,7 +2109,10 @@ function mergeStoredSettings(storedSettings: Partial<AppSettings>, storedSecrets
   return {
     ...DEFAULT_SETTINGS,
     ...storedSettings,
+    onboardingCompleted: storedSettings.onboardingCompleted ?? DEFAULT_SETTINGS.onboardingCompleted,
     globalSelectionExcludedApps,
+    globalSelectionClipboardFallbackEnabled:
+      storedSettings.globalSelectionClipboardFallbackEnabled ?? DEFAULT_SETTINGS.globalSelectionClipboardFallbackEnabled,
     aiFallbackEnabled: storedSettings.aiFallbackEnabled ?? DEFAULT_SETTINGS.aiFallbackEnabled,
     aiSources,
     ...storedSecrets,
@@ -1896,10 +2140,12 @@ function omitSecrets(settings: AppSettings) {
     provider: settings.provider,
     targetLanguage: settings.targetLanguage,
     darkMode: settings.darkMode,
+    onboardingCompleted: settings.onboardingCompleted,
     localProxyHost: settings.localProxyHost,
     localProxyPort: settings.localProxyPort,
     globalSelectionEnabled: settings.globalSelectionEnabled,
     globalSelectionExcludedApps: settings.globalSelectionExcludedApps,
+    globalSelectionClipboardFallbackEnabled: settings.globalSelectionClipboardFallbackEnabled,
     aiFallbackEnabled: settings.aiFallbackEnabled,
     aiSources: settings.aiSources.map((source) => ({ ...source, apiKey: '' })),
     baiduAppId: settings.baiduAppId,
@@ -2004,5 +2250,3 @@ function normalizeBody(body?: BodyInit | null) {
 
   throw new Error('Unsupported Tauri HTTP request body type');
 }
-
-
