@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "tsc -b && vite build",
+    "build": "pnpm clean && pnpm --filter @lingflow/core build && pnpm --filter @lingflow/dom build && tsc -b && vite build",
     "typecheck": "tsc -b",
     "lint": "oxlint",
     "test": "vitest run --passWithNoTests",
