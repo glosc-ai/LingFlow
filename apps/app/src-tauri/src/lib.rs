@@ -1,16 +1,23 @@
 ﻿use std::{
     collections::{HashMap, HashSet},
     fs,
-    mem::size_of,
     path::PathBuf,
-    process::Command,
-    ptr::null_mut,
-    sync::{mpsc, Arc, Mutex, OnceLock, RwLock},
+    sync::{Arc, Mutex, RwLock},
     thread,
-    time::{Duration, Instant},
 };
 use rusqlite::{params, Connection};
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size};
+use tauri_plugin_opener::OpenerExt;
+
+#[cfg(target_os = "windows")]
+use std::{
+    mem::size_of,
+    ptr::null_mut,
+    sync::{mpsc, OnceLock},
+    time::{Duration, Instant},
+};
+
+#[cfg(target_os = "windows")]
 use windows::{
     core::{BOOL, Interface},
     Win32::{
@@ -40,6 +47,7 @@ use windows::{
     },
 };
 
+#[cfg(target_os = "windows")]
 const SECRET_SERVICE: &str = "com.gloscai.lingflow";
 const SECRET_FIELDS: &[&str] = &[
     "aiApiKey",
@@ -53,13 +61,22 @@ const SECRET_FIELDS: &[&str] = &[
 ];
 const DEFAULT_LOCAL_PROXY_HOST: &str = "127.0.0.1";
 const DEFAULT_LOCAL_PROXY_PORT: u16 = 47631;
+#[cfg(not(target_os = "windows"))]
+const SECRET_DATA_PREFIX: &str = "secret:";
+
+#[cfg(target_os = "windows")]
 const CF_UNICODETEXT_FORMAT: u32 = 13;
+#[cfg(target_os = "windows")]
 const EM_GETSEL_MESSAGE: u32 = 0x00B0;
+#[cfg(target_os = "windows")]
 const GLOBAL_MOUSE_UP_EVENT: &str = "lingflow://global-mouse-up";
 
+#[cfg(target_os = "windows")]
 static GLOBAL_MOUSE_UP_TX: OnceLock<mpsc::Sender<ScreenPoint>> = OnceLock::new();
+#[cfg(target_os = "windows")]
 static GLOBAL_MOUSE_DRAG_STATE: OnceLock<Mutex<Option<MouseDragState>>> = OnceLock::new();
 
+#[cfg(target_os = "windows")]
 struct MouseDragState {
     point: POINT,
     started_at: Instant,
@@ -88,10 +105,12 @@ impl AppRuntimeSettings {
 
 #[derive(Clone)]
 struct SelectionCaptureState {
+    #[cfg(target_os = "windows")]
     inner: Arc<Mutex<SelectionCaptureGuard>>,
     diagnostics: Arc<Mutex<SelectionDiagnostics>>,
 }
 
+#[cfg(target_os = "windows")]
 struct SelectionCaptureGuard {
     last_capture: Option<Instant>,
 }
@@ -167,6 +186,7 @@ pub fn run() {
     };
     let proxy_app_handle = proxy_state.app_handle.clone();
     let selection_state = SelectionCaptureState {
+        #[cfg(target_os = "windows")]
         inner: Arc::new(Mutex::new(SelectionCaptureGuard { last_capture: None })),
         diagnostics: Arc::new(Mutex::new(SelectionDiagnostics::default())),
     };
@@ -179,6 +199,7 @@ pub fn run() {
         .manage(proxy_state)
         .manage(selection_state)
         .manage(app_data_store)
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             http_request,
             sync_local_proxy_settings,
@@ -208,9 +229,12 @@ pub fn run() {
             if let Ok(mut current_app_handle) = proxy_app_handle.lock() {
                 *current_app_handle = Some(app.handle().clone());
             }
-            if let Err(error) = center_main_window_at_screen_ratio(app.handle(), 0.6) {
-                log::warn!("failed to size LingFlow main window: {error}");
+            if cfg!(not(any(target_os = "android", target_os = "ios"))) {
+                if let Err(error) = center_main_window_at_screen_ratio(app.handle(), 0.6) {
+                    log::warn!("failed to size LingFlow main window: {error}");
+                }
             }
+            #[cfg(target_os = "windows")]
             start_global_mouse_up_listener(app.handle().clone());
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -282,12 +306,26 @@ fn parse_version_parts(value: &str) -> Vec<u64> {
 
 #[tauri::command]
 fn read_clipboard_text() -> Result<String, String> {
-    read_clipboard_text_native()
+    #[cfg(target_os = "windows")]
+    {
+        read_clipboard_text_native()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Clipboard reading is only available on the Windows desktop client".to_string())
+    }
 }
 
 #[tauri::command]
 fn foreground_process_name() -> Result<String, String> {
-    foreground_process_name_inner()
+    #[cfg(target_os = "windows")]
+    {
+        foreground_process_name_inner()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Foreground process detection is only available on the Windows desktop client".to_string())
+    }
 }
 
 #[tauri::command]
@@ -331,17 +369,15 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
 }
 
 #[tauri::command]
-fn open_external_url(url: String) -> Result<(), String> {
+fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     let trimmed = url.trim();
     if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
         return Err("Only http and https URLs can be opened".to_string());
     }
 
-    Command::new("rundll32.exe")
-        .args(["url.dll,FileProtocolHandler", trimmed])
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    Ok(())
+    app.opener()
+        .open_url(trimmed.to_string(), None::<String>)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -352,20 +388,28 @@ async fn capture_foreground_selection(
     clipboard_fallback_enabled: Option<bool>,
     clipboard_fallback_apps: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let inner = state.inner.clone();
-    let diagnostics = state.diagnostics.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        capture_foreground_selection_with_state(
-            inner,
-            diagnostics,
-            excluded_apps,
-            cursor_position,
-            clipboard_fallback_enabled.unwrap_or(false),
-            clipboard_fallback_apps.unwrap_or_default(),
-        )
-    })
-        .await
-        .map_err(|error| error.to_string())?
+    #[cfg(target_os = "windows")]
+    {
+        let inner = state.inner.clone();
+        let diagnostics = state.diagnostics.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            capture_foreground_selection_with_state(
+                inner,
+                diagnostics,
+                excluded_apps,
+                cursor_position,
+                clipboard_fallback_enabled.unwrap_or(false),
+                clipboard_fallback_apps.unwrap_or_default(),
+            )
+        })
+            .await
+            .map_err(|error| error.to_string())?
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (state, excluded_apps, cursor_position, clipboard_fallback_enabled, clipboard_fallback_apps);
+        Err("Global selection translation is not available on Android or other non-Windows clients".to_string())
+    }
 }
 
 #[tauri::command]
@@ -373,7 +417,15 @@ async fn read_foreground_selected_text(
     state: tauri::State<'_, SelectionCaptureState>,
     excluded_apps: Vec<String>,
 ) -> Result<String, String> {
-    capture_foreground_selection(state, excluded_apps, None, Some(false), Some(Vec::new())).await
+    #[cfg(target_os = "windows")]
+    {
+        capture_foreground_selection(state, excluded_apps, None, Some(false), Some(Vec::new())).await
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (state, excluded_apps);
+        Err("Foreground selection reading is only available on the Windows desktop client".to_string())
+    }
 }
 
 #[tauri::command]
@@ -387,53 +439,69 @@ fn selection_diagnostics(state: tauri::State<SelectionCaptureState>) -> Result<S
 
 #[tauri::command]
 fn set_overlay_no_activate(app: tauri::AppHandle, label: String) -> Result<(), String> {
-    let window = app
-        .get_webview_window(&label)
-        .ok_or_else(|| format!("Window {label} not found"))?;
-    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
-    let hwnd = HWND(hwnd.0);
-    unsafe {
-        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        SetWindowLongPtrW(
-            hwnd,
-            GWL_EXSTYLE,
-            style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize,
-        );
+    #[cfg(target_os = "windows")]
+    {
+        let window = app
+            .get_webview_window(&label)
+            .ok_or_else(|| format!("Window {label} not found"))?;
+        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        let hwnd = HWND(hwnd.0);
+        unsafe {
+            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(
+                hwnd,
+                GWL_EXSTYLE,
+                style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize,
+            );
+        }
+        Ok(())
     }
-    Ok(())
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, label);
+        Ok(())
+    }
 }
 
 #[tauri::command]
 fn list_running_process_names() -> Result<Vec<String>, String> {
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
-        .map_err(|error| error.message().to_string())?;
-    let mut entry = PROCESSENTRY32W {
-        dwSize: size_of::<PROCESSENTRY32W>() as u32,
-        ..Default::default()
-    };
-    let mut names = Vec::<String>::new();
+    #[cfg(target_os = "windows")]
+    {
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
+            .map_err(|error| error.message().to_string())?;
+        let mut entry = PROCESSENTRY32W {
+            dwSize: size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut names = Vec::<String>::new();
 
-    let mut has_entry = unsafe { Process32FirstW(snapshot, &mut entry).is_ok() };
-    while has_entry {
-        let end = entry
-            .szExeFile
-            .iter()
-            .position(|value| *value == 0)
-            .unwrap_or(entry.szExeFile.len());
-        let name = String::from_utf16_lossy(&entry.szExeFile[..end]).trim().to_string();
-        if !name.is_empty() && !names.iter().any(|item| item.eq_ignore_ascii_case(&name)) {
-            names.push(name);
+        let mut has_entry = unsafe { Process32FirstW(snapshot, &mut entry).is_ok() };
+        while has_entry {
+            let end = entry
+                .szExeFile
+                .iter()
+                .position(|value| *value == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let name = String::from_utf16_lossy(&entry.szExeFile[..end]).trim().to_string();
+            if !name.is_empty() && !names.iter().any(|item| item.eq_ignore_ascii_case(&name)) {
+                names.push(name);
+            }
+            has_entry = unsafe { Process32NextW(snapshot, &mut entry).is_ok() };
         }
-        has_entry = unsafe { Process32NextW(snapshot, &mut entry).is_ok() };
-    }
 
-    unsafe {
-        CloseHandle(snapshot).map_err(|error| error.message().to_string())?;
+        unsafe {
+            CloseHandle(snapshot).map_err(|error| error.message().to_string())?;
+        }
+        names.sort_by_key(|name| name.to_ascii_lowercase());
+        Ok(names)
     }
-    names.sort_by_key(|name| name.to_ascii_lowercase());
-    Ok(names)
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(Vec::new())
+    }
 }
 
+#[cfg(target_os = "windows")]
 fn capture_foreground_selection_with_state(
     inner: Arc<Mutex<SelectionCaptureGuard>>,
     diagnostics: Arc<Mutex<SelectionDiagnostics>>,
@@ -492,6 +560,7 @@ fn capture_foreground_selection_with_state(
     result
 }
 
+#[cfg(target_os = "windows")]
 fn capture_foreground_selection_inner(
     diagnostics: &Arc<Mutex<SelectionDiagnostics>>,
     excluded_apps: &[String],
@@ -566,12 +635,14 @@ fn capture_foreground_selection_inner(
     Err("No selected text was found through Windows UI Automation".to_string())
 }
 
+#[cfg(target_os = "windows")]
 fn write_selection_diagnostics(diagnostics: &Arc<Mutex<SelectionDiagnostics>>, next: SelectionDiagnostics) {
     if let Ok(mut current) = diagnostics.lock() {
         *current = next;
     }
 }
 
+#[cfg(target_os = "windows")]
 fn update_selection_diagnostics(
     diagnostics: &Arc<Mutex<SelectionDiagnostics>>,
     update: impl FnOnce(&mut SelectionDiagnostics),
@@ -581,6 +652,7 @@ fn update_selection_diagnostics(
     }
 }
 
+#[cfg(target_os = "windows")]
 fn push_selection_attempt(
     diagnostics: &Arc<Mutex<SelectionDiagnostics>>,
     strategy: impl Into<String>,
@@ -596,6 +668,7 @@ fn push_selection_attempt(
     });
 }
 
+#[cfg(target_os = "windows")]
 fn normalize_selected_text(value: String) -> Result<String, String> {
     let normalized = value.trim().to_string();
     if normalized.is_empty() {
@@ -605,6 +678,7 @@ fn normalize_selected_text(value: String) -> Result<String, String> {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn foreground_process_name_inner() -> Result<String, String> {
     let hwnd = foreground_window()?;
     let mut process_id = 0;
@@ -642,6 +716,7 @@ fn foreground_process_name_inner() -> Result<String, String> {
     Ok(process_name.to_string())
 }
 
+#[cfg(target_os = "windows")]
 fn foreground_window() -> Result<HWND, String> {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.0.is_null() {
@@ -651,6 +726,7 @@ fn foreground_window() -> Result<HWND, String> {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn focused_control_window() -> Result<HWND, String> {
     let foreground = foreground_window()?;
     let thread_id = unsafe { GetWindowThreadProcessId(foreground, None) };
@@ -670,6 +746,7 @@ fn focused_control_window() -> Result<HWND, String> {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn start_global_mouse_up_listener(app_handle: tauri::AppHandle) {
     let (tx, rx) = mpsc::channel::<ScreenPoint>();
     let _ = GLOBAL_MOUSE_UP_TX.set(tx);
@@ -698,6 +775,7 @@ fn start_global_mouse_up_listener(app_handle: tauri::AppHandle) {
     });
 }
 
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn global_mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         let message = wparam.0 as u32;
@@ -717,6 +795,7 @@ unsafe extern "system" fn global_mouse_hook_proc(code: i32, wparam: WPARAM, lpar
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
+#[cfg(target_os = "windows")]
 fn remember_global_mouse_down(message: u32, lparam: LPARAM) {
     let Some(state) = GLOBAL_MOUSE_DRAG_STATE.get() else {
         return;
@@ -733,6 +812,7 @@ fn remember_global_mouse_down(message: u32, lparam: LPARAM) {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn global_mouse_up_selection_point(message: u32, lparam: LPARAM) -> Option<POINT> {
     let Some(state) = GLOBAL_MOUSE_DRAG_STATE.get() else {
         return None;
@@ -762,10 +842,12 @@ fn global_mouse_up_selection_point(message: u32, lparam: LPARAM) -> Option<POINT
     }
 }
 
+#[cfg(target_os = "windows")]
 fn mouse_buttons_match(down: u32, up: u32) -> bool {
     matches!((down, up), (WM_LBUTTONDOWN, WM_LBUTTONUP) | (WM_RBUTTONDOWN, WM_RBUTTONUP))
 }
 
+#[cfg(target_os = "windows")]
 fn mouse_event_point(lparam: LPARAM) -> Option<POINT> {
     if lparam.0 == 0 {
         return None;
@@ -778,6 +860,7 @@ fn mouse_event_point(lparam: LPARAM) -> Option<POINT> {
     })
 }
 
+#[cfg(target_os = "windows")]
 fn mouse_event_is_on_lingflow_window(lparam: LPARAM) -> bool {
     let Some(point) = mouse_event_point(lparam) else {
         return false;
@@ -785,6 +868,7 @@ fn mouse_event_is_on_lingflow_window(lparam: LPARAM) -> bool {
     point_is_inside_current_process_window(point) || window_from_point_belongs_to_current_process(point)
 }
 
+#[cfg(target_os = "windows")]
 fn window_from_point_belongs_to_current_process(point: POINT) -> bool {
     let hwnd = unsafe { WindowFromPoint(point) };
     if hwnd.0.is_null() {
@@ -794,6 +878,7 @@ fn window_from_point_belongs_to_current_process(point: POINT) -> bool {
     window_belongs_to_current_process(hwnd)
 }
 
+#[cfg(target_os = "windows")]
 fn point_is_inside_current_process_window(point: POINT) -> bool {
     let mut context = WindowHitTestContext { point, hit: false };
     let context_ptr = &mut context as *mut WindowHitTestContext;
@@ -801,11 +886,13 @@ fn point_is_inside_current_process_window(point: POINT) -> bool {
     context.hit
 }
 
+#[cfg(target_os = "windows")]
 struct WindowHitTestContext {
     point: POINT,
     hit: bool,
 }
 
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn enum_current_process_windows(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let context = unsafe { &mut *(lparam.0 as *mut WindowHitTestContext) };
     if context.hit || !window_belongs_to_current_process(hwnd) {
@@ -826,6 +913,7 @@ unsafe extern "system" fn enum_current_process_windows(hwnd: HWND, lparam: LPARA
     true.into()
 }
 
+#[cfg(target_os = "windows")]
 fn window_belongs_to_current_process(hwnd: HWND) -> bool {
     let mut process_id = 0;
     unsafe {
@@ -834,6 +922,7 @@ fn window_belongs_to_current_process(hwnd: HWND) -> bool {
     process_id != 0 && process_id == unsafe { GetCurrentProcessId() }
 }
 
+#[cfg(target_os = "windows")]
 fn selected_text_from_uia(cursor_position: Option<ScreenPoint>) -> Result<String, String> {
     let _com = ComApartment::init()?;
     let automation: IUIAutomation =
@@ -892,6 +981,7 @@ fn selected_text_from_uia(cursor_position: Option<ScreenPoint>) -> Result<String
     }
 }
 
+#[cfg(target_os = "windows")]
 fn selected_text_from_uia_element(element: &windows::Win32::UI::Accessibility::IUIAutomationElement) -> Result<String, String> {
     let pattern = unsafe { element.GetCurrentPattern(UIA_TextPatternId) }
         .map_err(|error| error.message().to_string())?;
@@ -910,6 +1000,7 @@ fn selected_text_from_uia_element(element: &windows::Win32::UI::Accessibility::I
     normalize_selected_text(selected)
 }
 
+#[cfg(target_os = "windows")]
 fn selected_text_from_standard_edit() -> Result<String, String> {
     let hwnd = focused_control_window()?;
     let mut selection_start = 0u32;
@@ -953,6 +1044,7 @@ fn selected_text_from_standard_edit() -> Result<String, String> {
     normalize_selected_text(String::from_utf16_lossy(&utf16[start..end]))
 }
 
+#[cfg(target_os = "windows")]
 fn selected_text_from_clipboard_fallback() -> Result<String, String> {
     let original_clipboard = read_clipboard_text_native().unwrap_or_default();
     send_copy_shortcut_native()?;
@@ -968,6 +1060,7 @@ fn selected_text_from_clipboard_fallback() -> Result<String, String> {
     normalize_selected_text(selected_text)
 }
 
+#[cfg(target_os = "windows")]
 fn send_copy_shortcut_native() -> Result<(), String> {
     let inputs = [
         keyboard_input(VK_CONTROL.0 as u16, false),
@@ -983,6 +1076,7 @@ fn send_copy_shortcut_native() -> Result<(), String> {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn keyboard_input(vk: u16, key_up: bool) -> INPUT {
     INPUT {
         r#type: INPUT_KEYBOARD,
@@ -998,6 +1092,7 @@ fn keyboard_input(vk: u16, key_up: bool) -> INPUT {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn read_clipboard_text_native() -> Result<String, String> {
     let _clipboard = ClipboardSession::open()?;
     let available = unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT_FORMAT).is_ok() };
@@ -1028,6 +1123,7 @@ fn read_clipboard_text_native() -> Result<String, String> {
     Ok(text)
 }
 
+#[cfg(target_os = "windows")]
 fn set_clipboard_text_native(value: &str) -> Result<(), String> {
     let _clipboard = ClipboardSession::open()?;
     unsafe { EmptyClipboard() }.map_err(|error| error.message().to_string())?;
@@ -1052,8 +1148,10 @@ fn set_clipboard_text_native(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
 struct ClipboardSession;
 
+#[cfg(target_os = "windows")]
 impl ClipboardSession {
     fn open() -> Result<Self, String> {
         unsafe { OpenClipboard(Some(HWND(null_mut()))) }
@@ -1062,6 +1160,7 @@ impl ClipboardSession {
     }
 }
 
+#[cfg(target_os = "windows")]
 impl Drop for ClipboardSession {
     fn drop(&mut self) {
         unsafe {
@@ -1070,8 +1169,10 @@ impl Drop for ClipboardSession {
     }
 }
 
+#[cfg(target_os = "windows")]
 struct ComApartment;
 
+#[cfg(target_os = "windows")]
 impl ComApartment {
     fn init() -> Result<Self, String> {
         unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
@@ -1080,6 +1181,7 @@ impl ComApartment {
     }
 }
 
+#[cfg(target_os = "windows")]
 impl Drop for ComApartment {
     fn drop(&mut self) {
         unsafe {
@@ -1088,6 +1190,7 @@ impl Drop for ComApartment {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn is_excluded_process(process_name: &str, excluded_apps: &[String]) -> bool {
     let normalized_process = process_name.trim().to_ascii_lowercase();
     excluded_apps.iter().any(|item| {
@@ -1267,63 +1370,79 @@ struct AppSecrets {
 }
 
 #[tauri::command]
-fn read_app_secrets() -> Result<AppSecrets, String> {
+fn read_app_secrets(state: tauri::State<AppDataStoreState>) -> Result<AppSecrets, String> {
     Ok(AppSecrets {
-        ai_api_key: read_secret("aiApiKey")?,
-        ai_source_api_keys: read_json_secret("aiSourceApiKeys")?,
-        google_api_key: read_secret("googleApiKey")?,
-        baidu_secret_key: read_secret("baiduSecretKey")?,
-        deepl_api_key: read_secret("deeplApiKey")?,
-        microsoft_api_key: read_secret("microsoftApiKey")?,
-        youdao_app_secret: read_secret("youdaoAppSecret")?,
-        tencent_secret_key: read_secret("tencentSecretKey")?,
+        ai_api_key: read_secret(state.inner(), "aiApiKey")?,
+        ai_source_api_keys: read_json_secret(state.inner(), "aiSourceApiKeys")?,
+        google_api_key: read_secret(state.inner(), "googleApiKey")?,
+        baidu_secret_key: read_secret(state.inner(), "baiduSecretKey")?,
+        deepl_api_key: read_secret(state.inner(), "deeplApiKey")?,
+        microsoft_api_key: read_secret(state.inner(), "microsoftApiKey")?,
+        youdao_app_secret: read_secret(state.inner(), "youdaoAppSecret")?,
+        tencent_secret_key: read_secret(state.inner(), "tencentSecretKey")?,
     })
 }
 
 #[tauri::command]
-fn save_app_secrets(secrets: AppSecrets) -> Result<(), String> {
-    write_secret("aiApiKey", secrets.ai_api_key)?;
-    write_json_secret("aiSourceApiKeys", secrets.ai_source_api_keys)?;
-    write_secret("googleApiKey", secrets.google_api_key)?;
-    write_secret("baiduSecretKey", secrets.baidu_secret_key)?;
-    write_secret("deeplApiKey", secrets.deepl_api_key)?;
-    write_secret("microsoftApiKey", secrets.microsoft_api_key)?;
-    write_secret("youdaoAppSecret", secrets.youdao_app_secret)?;
-    write_secret("tencentSecretKey", secrets.tencent_secret_key)?;
+fn save_app_secrets(state: tauri::State<AppDataStoreState>, secrets: AppSecrets) -> Result<(), String> {
+    write_secret(state.inner(), "aiApiKey", secrets.ai_api_key)?;
+    write_json_secret(state.inner(), "aiSourceApiKeys", secrets.ai_source_api_keys)?;
+    write_secret(state.inner(), "googleApiKey", secrets.google_api_key)?;
+    write_secret(state.inner(), "baiduSecretKey", secrets.baidu_secret_key)?;
+    write_secret(state.inner(), "deeplApiKey", secrets.deepl_api_key)?;
+    write_secret(state.inner(), "microsoftApiKey", secrets.microsoft_api_key)?;
+    write_secret(state.inner(), "youdaoAppSecret", secrets.youdao_app_secret)?;
+    write_secret(state.inner(), "tencentSecretKey", secrets.tencent_secret_key)?;
     Ok(())
 }
 
 #[tauri::command]
-fn delete_app_secrets() -> Result<(), String> {
+fn delete_app_secrets(state: tauri::State<AppDataStoreState>) -> Result<(), String> {
     for field in SECRET_FIELDS {
-        delete_secret(field)?;
+        delete_secret(state.inner(), field)?;
     }
     Ok(())
 }
 
-fn read_secret(name: &str) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(SECRET_SERVICE, name).map_err(|error| error.to_string())?;
-    match entry.get_password() {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(error.to_string()),
+fn read_secret(state: &AppDataStoreState, name: &str) -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = state;
+        let entry = keyring::Entry::new(SECRET_SERVICE, name).map_err(|error| error.to_string())?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        read_secret_from_app_data(state, name)
     }
 }
 
-fn write_secret(name: &str, value: Option<String>) -> Result<(), String> {
+fn write_secret(state: &AppDataStoreState, name: &str, value: Option<String>) -> Result<(), String> {
     let normalized = value.unwrap_or_default();
     if normalized.trim().is_empty() {
-        return delete_secret(name);
+        return delete_secret(state, name);
     }
 
-    let entry = keyring::Entry::new(SECRET_SERVICE, name).map_err(|error| error.to_string())?;
-    entry
-        .set_password(&normalized)
-        .map_err(|error| error.to_string())
+    #[cfg(target_os = "windows")]
+    {
+        let _ = state;
+        let entry = keyring::Entry::new(SECRET_SERVICE, name).map_err(|error| error.to_string())?;
+        entry
+            .set_password(&normalized)
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        write_secret_to_app_data(state, name, &normalized)
+    }
 }
 
-fn read_json_secret<T: serde::de::DeserializeOwned>(name: &str) -> Result<Option<T>, String> {
-    match read_secret(name)? {
+fn read_json_secret<T: serde::de::DeserializeOwned>(state: &AppDataStoreState, name: &str) -> Result<Option<T>, String> {
+    match read_secret(state, name)? {
         Some(value) => serde_json::from_str(&value)
             .map(Some)
             .map_err(|error| error.to_string()),
@@ -1331,22 +1450,76 @@ fn read_json_secret<T: serde::de::DeserializeOwned>(name: &str) -> Result<Option
     }
 }
 
-fn write_json_secret<T: serde::Serialize>(name: &str, value: Option<T>) -> Result<(), String> {
+fn write_json_secret<T: serde::Serialize>(state: &AppDataStoreState, name: &str, value: Option<T>) -> Result<(), String> {
     match value {
         Some(value) => {
             let serialized = serde_json::to_string(&value).map_err(|error| error.to_string())?;
-            write_secret(name, Some(serialized))
+            write_secret(state, name, Some(serialized))
         }
-        None => delete_secret(name),
+        None => delete_secret(state, name),
     }
 }
 
-fn delete_secret(name: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(SECRET_SERVICE, name).map_err(|error| error.to_string())?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(error.to_string()),
+fn delete_secret(state: &AppDataStoreState, name: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = state;
+        let entry = keyring::Entry::new(SECRET_SERVICE, name).map_err(|error| error.to_string())?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
     }
+    #[cfg(not(target_os = "windows"))]
+    {
+        delete_secret_from_app_data(state, name)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn secret_data_key(name: &str) -> String {
+    format!("{SECRET_DATA_PREFIX}{name}")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_secret_from_app_data(state: &AppDataStoreState, name: &str) -> Result<Option<String>, String> {
+    let key = secret_data_key(name);
+    let guard = state.connection.lock().map_err(|error| error.to_string())?;
+    let connection = guard.as_ref().ok_or_else(|| "LingFlow app data store is not ready".to_string())?;
+    let mut statement = connection
+        .prepare("SELECT value FROM app_data WHERE key = ?1")
+        .map_err(|error| error.to_string())?;
+    let mut rows = statement.query(params![key]).map_err(|error| error.to_string())?;
+    match rows.next().map_err(|error| error.to_string())? {
+        Some(row) => row.get::<_, String>(0).map(Some).map_err(|error| error.to_string()),
+        None => Ok(None),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn write_secret_to_app_data(state: &AppDataStoreState, name: &str, value: &str) -> Result<(), String> {
+    let key = secret_data_key(name);
+    let guard = state.connection.lock().map_err(|error| error.to_string())?;
+    let connection = guard.as_ref().ok_or_else(|| "LingFlow app data store is not ready".to_string())?;
+    connection
+        .execute(
+            "INSERT INTO app_data (key, value, updated_at) VALUES (?1, ?2, unixepoch())
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()",
+            params![key, value],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn delete_secret_from_app_data(state: &AppDataStoreState, name: &str) -> Result<(), String> {
+    let key = secret_data_key(name);
+    let guard = state.connection.lock().map_err(|error| error.to_string())?;
+    let connection = guard.as_ref().ok_or_else(|| "LingFlow app data store is not ready".to_string())?;
+    connection
+        .execute("DELETE FROM app_data WHERE key = ?1", params![key])
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn start_local_proxy(state: LocalProxyState, addr: String) -> Result<(), String> {
