@@ -38,6 +38,12 @@ target/
 **/target/
 apps/app/src-tauri/target/
 apps/app/src-tauri/gen/
+!apps/app/src-tauri/gen/
+apps/app/src-tauri/gen/*
+!apps/app/src-tauri/gen/android/
+!apps/app/src-tauri/gen/android/**
+apps/app/src-tauri/gen/android/.gradle/
+apps/app/src-tauri/gen/android/**/build/
 
 # OS / editor files
 .DS_Store
