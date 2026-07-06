@@ -168,7 +168,7 @@ const DEFAULT_GLOBAL_SELECTION_EXCLUDED_APPS = [
 ] as const;
 
 const DEFAULT_SETTINGS: AppSettings = {
-  provider: 'baidu-free',
+  provider: 'ai',
   targetLanguage: 'zh-CN',
   darkMode: false,
   onboardingCompleted: false,
@@ -254,6 +254,8 @@ function LingFlowApp() {
   const globalSelectionBusyRef = useRef(false);
   const lastGlobalSelectionEventAtRef = useRef(0);
   const usageMonthRef = useRef(currentUsageMonthKey());
+  const isMobileClient = isMobileRuntime();
+  const globalSelectionAvailable = !isMobileClient;
 
   const recordProviderUsage = useCallback((provider: string, characters: number) => {
     if (!isTranslatorProvider(provider) || !Number.isFinite(characters) || characters <= 0) {
@@ -319,7 +321,7 @@ function LingFlowApp() {
   }, [recordProviderUsage]);
 
   useEffect(() => {
-    if (!canUseTauri()) {
+    if (!canUseTauri() || !globalSelectionAvailable) {
       return;
     }
 
@@ -346,10 +348,10 @@ function LingFlowApp() {
       disposed = true;
       void unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [settings.globalSelectionEnabled]);
+  }, [globalSelectionAvailable, settings.globalSelectionEnabled]);
 
   useEffect(() => {
-    if (!canUseTauri()) {
+    if (!canUseTauri() || !globalSelectionAvailable) {
       return;
     }
 
@@ -363,10 +365,10 @@ function LingFlowApp() {
     return () => {
       delete window.__lingflowSelectionDiagnostics;
     };
-  }, []);
+  }, [globalSelectionAvailable]);
 
   useEffect(() => {
-    if (!settingsLoaded || !settings.globalSelectionEnabled || !canUseTauri()) {
+    if (!settingsLoaded || !settings.globalSelectionEnabled || !canUseTauri() || !globalSelectionAvailable) {
       return;
     }
 
@@ -409,7 +411,7 @@ function LingFlowApp() {
       disposed = true;
       void unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [settings, settingsLoaded]);
+  }, [globalSelectionAvailable, settings, settingsLoaded]);
 
   useEffect(() => {
     let cancelled = false;
@@ -428,7 +430,7 @@ function LingFlowApp() {
       }
 
       if (!cancelled) {
-        setSettings(mergeStoredSettings(storedSettings, storedSecrets));
+        setSettings(normalizeSettingsForRuntime(mergeStoredSettings(storedSettings, storedSecrets)));
         setHistory(storedHistory);
         setSettingsLoaded(true);
       }
@@ -446,18 +448,22 @@ function LingFlowApp() {
       return;
     }
 
-    void writeStoredSettings(omitSecrets(settings));
+    const runtimeSettings = normalizeSettingsForRuntime(settings);
+    void writeStoredSettings(omitSecrets(runtimeSettings));
     if (!canUseTauri()) {
       return;
     }
 
-    invoke('save_app_secrets', { secrets: pickSecrets(settings) }).catch((error: unknown) => {
+    invoke('save_app_secrets', { secrets: pickSecrets(runtimeSettings) }).catch((error: unknown) => {
       setStatus(error instanceof Error ? error.message : String(error));
     });
-    invoke('sync_local_proxy_settings', { settings }).catch((error: unknown) => {
-      setStatus(error instanceof Error ? error.message : String(error));
-    });
-  }, [settings, settingsLoaded]);
+
+    if (!isMobileClient) {
+      invoke('sync_local_proxy_settings', { settings: runtimeSettings }).catch((error: unknown) => {
+        setStatus(error instanceof Error ? error.message : String(error));
+      });
+    }
+  }, [isMobileClient, settings, settingsLoaded]);
 
   const scheduler = useMemo(() => createScheduler(settings), [settings]);
   const activeProvider = getProvider(settings.provider);
@@ -637,6 +643,37 @@ function LingFlowApp() {
         onOpenKeyPage={() => void openExternalUrl('https://one.gloscai.com/keys')}
         onStart={() => completeOnboarding('translate')}
         onToggleDarkMode={() => setSettings({ ...settings, darkMode: !settings.darkMode })}
+        showGlobalSelectionStep={globalSelectionAvailable}
+      />
+    );
+  }
+
+  if (isMobileClient) {
+    return (
+      <MobileAppShell
+        activeProvider={activeProvider}
+        activeView={activeView}
+        clearSavedSecrets={clearSavedSecrets}
+        copyTranslation={copyTranslation}
+        filteredHistory={filteredHistory}
+        history={history}
+        historySearch={historySearch}
+        isTranslating={isTranslating}
+        onSourceLanguageChange={setSourceLanguage}
+        onTargetLanguageChange={(value) => setSettings({ ...settings, targetLanguage: value })}
+        onTranslate={translate}
+        providerUsage={providerUsage}
+        setActiveView={setActiveView}
+        setHistorySearch={setHistorySearch}
+        setSettings={setSettings}
+        setSourceText={setSourceText}
+        setTranslatedText={setTranslatedText}
+        settings={settings}
+        sourceLanguage={sourceLanguage}
+        sourceText={sourceText}
+        status={status}
+        translatedText={translatedText}
+        usageMonth={usageMonth}
       />
     );
   }
@@ -654,7 +691,7 @@ function LingFlowApp() {
           >
             {settings.darkMode ? <Sun size={17} /> : <Moon size={17} />}
           </Button>
-          <WindowControls />
+          {isMobileClient ? null : <WindowControls />}
         </div>
       </header>
 
@@ -703,8 +740,12 @@ function LingFlowApp() {
             translatedText={translatedText}
           />
         ) : null}
-        {activeView === 'settings' ? <SettingsView onClearSecrets={clearSavedSecrets} onSettingsChange={setSettings} settings={settings} /> : null}
-        {activeView === 'app-settings' ? <AppSettingsView onSettingsChange={setSettings} settings={settings} /> : null}
+        {activeView === 'settings' ? (
+          <SettingsView onClearSecrets={clearSavedSecrets} onSettingsChange={setSettings} secretStoreLabel="Tauri Secret Store" settings={settings} />
+        ) : null}
+        {activeView === 'app-settings' ? (
+          <AppSettingsView globalSelectionAvailable={globalSelectionAvailable} localProxyAvailable onSettingsChange={setSettings} settings={settings} />
+        ) : null}
         {activeView === 'history' ? (
           <HistoryView
             history={filteredHistory}
@@ -721,15 +762,17 @@ function LingFlowApp() {
       </section>
 
       <aside className="right-rail">
-        <Card className="bg-[var(--surface-raised)]" title="全局划词">
-          <div className="grid gap-4 p-4">
-            <Toggle
-              checked={settings.globalSelectionEnabled}
-              label="启用全局划词"
-              onChange={(checked) => setSettings({ ...settings, globalSelectionEnabled: checked })}
-            />
-          </div>
-        </Card>
+        {globalSelectionAvailable ? (
+          <Card className="bg-[var(--surface-raised)]" title="全局划词">
+            <div className="grid gap-4 p-4">
+              <Toggle
+                checked={settings.globalSelectionEnabled}
+                label="启用全局划词"
+                onChange={(checked) => setSettings({ ...settings, globalSelectionEnabled: checked })}
+              />
+            </div>
+          </Card>
+        ) : null}
         <ServiceStatusCard
           health={providerHealth}
           isTesting={isTestingProviders}
@@ -751,6 +794,259 @@ function LingFlowApp() {
 }
 
 export default App;
+
+function MobileAppShell({
+  activeProvider,
+  activeView,
+  clearSavedSecrets,
+  copyTranslation,
+  filteredHistory,
+  history,
+  historySearch,
+  isTranslating,
+  onSourceLanguageChange,
+  onTargetLanguageChange,
+  onTranslate,
+  providerUsage,
+  setActiveView,
+  setHistorySearch,
+  setSettings,
+  setSourceText,
+  setTranslatedText,
+  settings,
+  sourceLanguage,
+  sourceText,
+  status,
+  translatedText,
+  usageMonth,
+}: {
+  readonly activeProvider: { readonly id: TranslatorProvider; readonly name: string; readonly group: 'AI' | 'Cloud' };
+  readonly activeView: ViewId;
+  readonly clearSavedSecrets: () => void;
+  readonly copyTranslation: () => void;
+  readonly filteredHistory: readonly HistoryItem[];
+  readonly history: readonly HistoryItem[];
+  readonly historySearch: string;
+  readonly isTranslating: boolean;
+  readonly onSourceLanguageChange: (value: string) => void;
+  readonly onTargetLanguageChange: (value: string) => void;
+  readonly onTranslate: () => void;
+  readonly providerUsage: ProviderUsage;
+  readonly setActiveView: (view: ViewId) => void;
+  readonly setHistorySearch: (value: string) => void;
+  readonly setSettings: (settings: AppSettings) => void;
+  readonly setSourceText: (value: string) => void;
+  readonly setTranslatedText: (value: string) => void;
+  readonly settings: AppSettings;
+  readonly sourceLanguage: string;
+  readonly sourceText: string;
+  readonly status: string;
+  readonly translatedText: string;
+  readonly usageMonth: string;
+}) {
+  const totalUsage = Object.values(providerUsage).reduce((sum, value) => sum + (value ?? 0), 0);
+  const configuredProviders = getConfiguredProviders(settings);
+
+  function handleHistoryItem(item: HistoryItem) {
+    setSourceText(item.source);
+    setTranslatedText(item.target);
+    setSettings({ ...settings, provider: item.provider, targetLanguage: item.targetLanguage });
+    setActiveView('translate');
+  }
+
+  function swapLanguages() {
+    if (sourceLanguage === 'auto') {
+      return;
+    }
+    onSourceLanguageChange(settings.targetLanguage);
+    onTargetLanguageChange(sourceLanguage);
+  }
+
+  return (
+    <main className="mobile-shell bg-[var(--bg)] text-[var(--fg)]">
+      <header className="mobile-header">
+        <LingFlowLogo className="mobile-brand" showWordmark />
+        <Button
+          aria-label="切换主题"
+          onClick={() => setSettings({ ...settings, darkMode: !settings.darkMode })}
+          size="icon"
+          variant="secondary"
+        >
+          {settings.darkMode ? <Sun size={18} /> : <Moon size={18} />}
+        </Button>
+      </header>
+
+      <section className="mobile-content">
+        {activeView === 'translate' ? (
+          <>
+            <section className="mobile-orb-section">
+              <div className="mobile-orb-container">
+                <span className="mobile-orb-ring" />
+                <span className="mobile-orb-ring" />
+                <span className="mobile-orb" />
+              </div>
+              <p className="mobile-orb-label">灵流服务运行中</p>
+              <p className="mobile-orb-sub">
+                <span className="mobile-live-dot" />
+                {activeProvider.name} · {status}
+              </p>
+            </section>
+
+            <div className="mobile-stats-row">
+              <div className="mobile-stat-card">
+                <span className="mobile-stat-label">本月翻译</span>
+                <span className="mobile-stat-value">{formatCharacterNumber(totalUsage)}</span>
+                <span className="mobile-stat-sub">{usageMonth} · 字符 · {history.length} 条历史</span>
+              </div>
+              <div className="mobile-stat-card">
+                <span className="mobile-stat-label">目标语言</span>
+                <span className="mobile-stat-value mobile-stat-value-text">{labelForLanguage(settings.targetLanguage)}</span>
+                <span className="mobile-stat-sub">{configuredProviders.length} 个可用服务源</span>
+              </div>
+            </div>
+
+            <div className="mobile-quick-switch">
+              <span className="mobile-quick-switch-label">翻译引擎</span>
+              <SelectInput value={settings.provider} onChange={(event) => setSettings({ ...settings, provider: event.currentTarget.value as TranslatorProvider })}>
+                {PROVIDERS.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </SelectInput>
+            </div>
+
+            <section className="mobile-translate-card" aria-labelledby="mobileTranslateTitle">
+              <div className="mobile-translate-head">
+                <div>
+                  <h1 id="mobileTranslateTitle">即时翻译</h1>
+                  <p>{sourceText.length} 字符</p>
+                </div>
+                <Button aria-label="清空原文" onClick={() => setSourceText('')} size="icon" variant="ghost">
+                  <Eraser size={17} />
+                </Button>
+              </div>
+              <textarea
+                className="mobile-translate-input"
+                onChange={(event) => setSourceText(event.currentTarget.value)}
+                placeholder="输入或粘贴要翻译的文本…"
+                value={sourceText}
+              />
+              <div className="mobile-translate-controls">
+                <SelectInput value={sourceLanguage} onChange={(event) => onSourceLanguageChange(event.currentTarget.value)}>
+                  <option value="auto">自动检测</option>
+                  {LANGUAGE_OPTIONS.map((language) => (
+                    <option key={language.value} value={language.value}>
+                      {language.label}
+                    </option>
+                  ))}
+                </SelectInput>
+                <Button aria-label="交换语言" disabled={sourceLanguage === 'auto'} onClick={swapLanguages} size="icon" variant="secondary">
+                  <ArrowLeftRight size={16} />
+                </Button>
+                <SelectInput value={settings.targetLanguage} onChange={(event) => onTargetLanguageChange(event.currentTarget.value)}>
+                  {LANGUAGE_OPTIONS.map((language) => (
+                    <option key={language.value} value={language.value}>
+                      {language.label}
+                    </option>
+                  ))}
+                </SelectInput>
+              </div>
+              <div className="mobile-translate-actions">
+                <Button disabled={isTranslating} onClick={onTranslate} variant="primary">
+                  {isTranslating ? <RefreshCcw className="animate-spin" size={16} /> : <Play size={16} />}
+                  {isTranslating ? '翻译中' : '翻译'}
+                </Button>
+                <Button onClick={copyTranslation} variant="secondary">
+                  <Copy size={16} />
+                  复制译文
+                </Button>
+              </div>
+              <div className={cn('mobile-translate-result', translatedText && 'ready', isTranslating && 'loading')}>
+                {isTranslating ? null : translatedText || '译文会显示在这里，便于直接复制或继续编辑。'}
+              </div>
+            </section>
+          </>
+        ) : null}
+
+        {activeView === 'settings' ? (
+          <section className="mobile-page-stack">
+            <MobilePageTitle title="服务源配置" subtitle="与桌面端保持同一套 Provider 设置" />
+            <SettingsView onClearSecrets={clearSavedSecrets} onSettingsChange={setSettings} secretStoreLabel="Android App Data" settings={settings} />
+          </section>
+        ) : null}
+
+        {activeView === 'history' ? (
+          <section className="mobile-page-stack">
+            <MobilePageTitle title="翻译历史" subtitle={`${filteredHistory.length} 条记录`} />
+            <div className="mobile-history-search">
+              <Search size={16} />
+              <input onChange={(event) => setHistorySearch(event.currentTarget.value)} placeholder="搜索原文、译文或服务源" value={historySearch} />
+            </div>
+            <div className="mobile-history-list">
+              {filteredHistory.length ? (
+                filteredHistory.map((item) => (
+                  <button className="mobile-history-item" key={item.id} onClick={() => handleHistoryItem(item)} type="button">
+                    <span className="mobile-history-lang">AUTO→{item.targetLanguage.toUpperCase()}</span>
+                    <span className="mobile-history-body">
+                      <span className="mobile-history-src">{item.source}</span>
+                      <span className="mobile-history-tgt">{item.target}</span>
+                      <span className="mobile-history-time">{formatDateTime(item.timestamp)} · {getProvider(item.provider).name}</span>
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <p className="mobile-empty-state">暂无历史记录，完成翻译后会自动出现在这里。</p>
+              )}
+            </div>
+          </section>
+        ) : null}
+
+        {activeView === 'app-settings' ? (
+          <section className="mobile-page-stack">
+            <MobilePageTitle title="设置" subtitle="移动端不包含全局划词与本地代理" />
+            <AppSettingsView globalSelectionAvailable={false} localProxyAvailable={false} onSettingsChange={setSettings} settings={settings} />
+          </section>
+        ) : null}
+      </section>
+
+      <nav className="mobile-bottom-nav" aria-label="移动端主导航">
+        <MobileNavButton active={activeView === 'translate'} icon={<Languages size={22} />} label="控制台" onClick={() => setActiveView('translate')} />
+        <MobileNavButton active={activeView === 'settings'} icon={<Settings size={22} />} label="服务源" onClick={() => setActiveView('settings')} />
+        <MobileNavButton active={activeView === 'history'} icon={<History size={22} />} label="历史" onClick={() => setActiveView('history')} />
+        <MobileNavButton active={activeView === 'app-settings'} icon={<SlidersHorizontal size={22} />} label="设置" onClick={() => setActiveView('app-settings')} />
+      </nav>
+    </main>
+  );
+}
+
+function MobilePageTitle({ subtitle, title }: { readonly subtitle: string; readonly title: string }) {
+  return (
+    <div className="mobile-page-title">
+      <h1>{title}</h1>
+      <p>{subtitle}</p>
+    </div>
+  );
+}
+
+function MobileNavButton({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  readonly active: boolean;
+  readonly icon: React.ReactNode;
+  readonly label: string;
+  readonly onClick: () => void;
+}) {
+  return (
+    <button className={cn('mobile-nav-tab', active && 'active')} onClick={onClick} type="button">
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+}
 
 function WindowControls() {
   const currentWindow = getCurrentWebviewWindow();
@@ -776,31 +1072,39 @@ function OnboardingScreen({
   onOpenKeyPage,
   onStart,
   onToggleDarkMode,
+  showGlobalSelectionStep,
 }: {
   readonly darkMode: boolean;
   readonly onConfigureProvider: () => void;
   readonly onOpenKeyPage: () => void;
   readonly onStart: () => void;
   readonly onToggleDarkMode: () => void;
+  readonly showGlobalSelectionStep: boolean;
 }) {
+  const showTopbar = showGlobalSelectionStep;
+
   return (
-    <main className="onboarding-shell bg-[var(--bg)] text-[var(--fg)]">
-      <header className="topbar">
-        <LingFlowLogo showWordmark />
-        <div className="topbar-actions">
-          <Button aria-label="切换主题" onClick={onToggleDarkMode} size="icon" variant="ghost">
-            {darkMode ? <Sun size={17} /> : <Moon size={17} />}
-          </Button>
-          <WindowControls />
-        </div>
-      </header>
+    <main className={cn('onboarding-shell bg-[var(--bg)] text-[var(--fg)]', !showTopbar && 'onboarding-shell-no-topbar')}>
+      {showTopbar ? (
+        <header className="topbar">
+          <LingFlowLogo showWordmark />
+          <div className="topbar-actions">
+            <Button aria-label="切换主题" onClick={onToggleDarkMode} size="icon" variant="ghost">
+              {darkMode ? <Sun size={17} /> : <Moon size={17} />}
+            </Button>
+            <WindowControls />
+          </div>
+        </header>
+      ) : null}
       <section className="onboarding-content">
         <div className="onboarding-hero">
           <LingFlowLogo className="onboarding-logo" />
           <p className="text-sm font-semibold text-[var(--primary)]">欢迎使用灵流</p>
           <h1>让翻译像水流一样融入阅读</h1>
           <p className="onboarding-copy">
-            灵流会把桌面端、浏览器扩展和翻译服务源连接在一起。完成首次设置后，你可以直接使用文本翻译、网页双语翻译和全局划词悬浮窗。
+            {showGlobalSelectionStep
+              ? '灵流会把桌面端、浏览器扩展和翻译服务源连接在一起。完成首次设置后，你可以直接使用文本翻译、网页双语翻译和全局划词悬浮窗。'
+              : '灵流会把移动端、翻译服务源和历史记录连接在一起。完成首次设置后，你可以直接使用文本翻译、服务源配置和本地历史记录。'}
           </p>
           <div className="onboarding-actions">
             <Button onClick={onStart} variant="primary">
@@ -824,20 +1128,41 @@ function OnboardingScreen({
               </button>
             </div>
           </article>
-          <article className="onboarding-step">
-            <span>2</span>
-            <div>
-              <h2>启动浏览器扩展</h2>
-              <p>扩展会通过本地代理读取桌面端配置，不需要在浏览器里重复保存密钥。</p>
-            </div>
-          </article>
-          <article className="onboarding-step">
-            <span>3</span>
-            <div>
-              <h2>开启全局划词</h2>
-              <p>在软件设置中开启全局划词后，选中文本即可唤起灵流悬浮翻译窗。</p>
-            </div>
-          </article>
+          {showGlobalSelectionStep ? (
+            <>
+              <article className="onboarding-step">
+                <span>2</span>
+                <div>
+                  <h2>启动浏览器扩展</h2>
+                  <p>扩展会通过本地代理读取桌面端配置，不需要在浏览器里重复保存密钥。</p>
+                </div>
+              </article>
+              <article className="onboarding-step">
+                <span>3</span>
+                <div>
+                  <h2>开启全局划词</h2>
+                  <p>在软件设置中开启全局划词后，选中文本即可唤起灵流悬浮翻译窗。</p>
+                </div>
+              </article>
+            </>
+          ) : (
+            <>
+              <article className="onboarding-step">
+                <span>2</span>
+                <div>
+                  <h2>选择目标语言</h2>
+                  <p>移动端复用桌面端的服务源配置模型，可按阅读场景切换目标语言。</p>
+                </div>
+              </article>
+              <article className="onboarding-step">
+                <span>3</span>
+                <div>
+                  <h2>保留翻译历史</h2>
+                  <p>常用文本会保存在本机历史记录中，便于回看和再次使用。</p>
+                </div>
+              </article>
+            </>
+          )}
         </div>
       </section>
     </main>
@@ -1302,15 +1627,17 @@ function TranslationPanel({ children, footer, language, title }: { readonly chil
 function SettingsView({
   onClearSecrets,
   onSettingsChange,
+  secretStoreLabel,
   settings,
 }: {
   readonly onClearSecrets: () => void;
   readonly onSettingsChange: (settings: AppSettings) => void;
+  readonly secretStoreLabel: string;
   readonly settings: AppSettings;
 }) {
   return (
     <div className="settings-grid">
-      <Card title="默认翻译">
+      <Card className="settings-default-card" title="默认翻译">
         <div className="grid gap-4 p-5">
           <Field label="默认服务源">
             <SelectInput value={settings.provider} onChange={(event) => onSettingsChange({ ...settings, provider: event.currentTarget.value as TranslatorProvider })}>
@@ -1333,9 +1660,9 @@ function SettingsView({
         </div>
       </Card>
 
-      <Card title="本机状态">
+      <Card className="settings-local-status-card" title="本机状态">
         <div className="grid gap-3 p-5 text-sm text-[var(--muted)]">
-          <InfoRow icon={<ShieldCheck size={16} />} label="密钥存储" value="Tauri Secret Store" />
+          <InfoRow icon={<ShieldCheck size={16} />} label="密钥存储" value={secretStoreLabel} />
           <InfoRow icon={<Database size={16} />} label="本地缓存" value="TranslationScheduler" />
           <Button onClick={onClearSecrets} variant="danger">
             <Trash2 size={16} />
@@ -1344,7 +1671,7 @@ function SettingsView({
         </div>
       </Card>
 
-      <Card className="settings-wide" title="服务源配置">
+      <Card className="settings-wide settings-provider-card" title="服务源配置">
         <div className="provider-config-grid p-5">
           <ProviderConfig settings={settings} onSettingsChange={onSettingsChange} />
         </div>
@@ -1354,9 +1681,13 @@ function SettingsView({
 }
 
 function AppSettingsView({
+  globalSelectionAvailable,
+  localProxyAvailable,
   onSettingsChange,
   settings,
 }: {
+  readonly globalSelectionAvailable: boolean;
+  readonly localProxyAvailable: boolean;
   readonly onSettingsChange: (settings: AppSettings) => void;
   readonly settings: AppSettings;
 }) {
@@ -1425,83 +1756,87 @@ function AppSettingsView({
         </div>
       </Card>
 
-      <Card title="本地代理">
-        <div className="grid gap-4 p-5">
-          <Field hint="浏览器扩展会通过这个地址读取桌面端配置并代理翻译请求。局域网共享可使用 0.0.0.0 或本机局域网 IP。" label="监听地址">
-            <TextInput
-              onChange={(event) => onSettingsChange({ ...settings, localProxyHost: event.currentTarget.value })}
-              placeholder="127.0.0.1"
-              value={settings.localProxyHost}
-            />
-          </Field>
-          <Field hint="如果端口被占用，请改为其他未占用端口，并在浏览器扩展中填写相同代理地址。" label="监听端口">
-            <TextInput
-              min={1}
-              max={65535}
-              onChange={(event) =>
-                onSettingsChange({
-                  ...settings,
-                  localProxyPort: Number.parseInt(event.currentTarget.value, 10) || DEFAULT_SETTINGS.localProxyPort,
-                })
-              }
-              type="number"
-              value={String(settings.localProxyPort)}
-            />
-          </Field>
-          <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">
-            扩展端代理地址：http://{settings.localProxyHost === '0.0.0.0' ? '127.0.0.1' : settings.localProxyHost}:{settings.localProxyPort}
-          </div>
-        </div>
-      </Card>
-
-      <Card className="settings-wide" title="全局划词">
-        <div className="grid gap-4 p-5">
-          <Toggle checked={settings.globalSelectionEnabled} label="启用全局划词" onChange={(checked) => onSettingsChange({ ...settings, globalSelectionEnabled: checked })} />
-          <Toggle
-            checked={settings.globalSelectionClipboardFallbackEnabled}
-            label="启用兼容剪贴板兜底"
-            onChange={(checked) => onSettingsChange({ ...settings, globalSelectionClipboardFallbackEnabled: checked })}
-          />
-          <p className="text-xs leading-5 text-[var(--muted)]">
-            仅当 UI Automation 无法读取且前台进程未命中下方黑名单时，才会临时发送 Ctrl+C 读取文本。
-          </p>
-          <Field hint="一行一个进程名，例如 explorer.exe、Code.exe、chrome.exe。命中后不会读取该软件中的选中文本，也不会触发兼容兜底。" label="进程黑名单">
-            <textarea
-              className="settings-textarea"
-              onChange={(event) =>
-                onSettingsChange({
-                  ...settings,
-                  globalSelectionExcludedApps: event.currentTarget.value
-                    .split('\n')
-                    .map((item) => item.trim())
-                    .filter(Boolean),
-                })
-              }
-              value={settings.globalSelectionExcludedApps.join('\n')}
-            />
-          </Field>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button disabled={isLoadingProcesses} onClick={loadRunningProcesses} size="sm" variant="secondary">
-              {isLoadingProcesses ? <RefreshCcw className="animate-spin" size={14} /> : <RefreshCcw size={14} />}
-              加载当前进程
-            </Button>
-            <span className="text-xs text-[var(--muted)]">勾选后会加入进程黑名单。</span>
-          </div>
-          {runningProcesses.length ? (
-            <div className="process-picker">
-              {runningProcesses.map((processName) => {
-                const checked = settings.globalSelectionExcludedApps.some((item) => item.toLowerCase() === processName.toLowerCase());
-                return (
-                  <label className="process-option" key={processName}>
-                    <input checked={checked} onChange={(event) => toggleExcludedProcess(processName, event.currentTarget.checked)} type="checkbox" />
-                    <span>{processName}</span>
-                  </label>
-                );
-              })}
+      {localProxyAvailable ? (
+        <Card title="本地代理">
+          <div className="grid gap-4 p-5">
+            <Field hint="浏览器扩展会通过这个地址读取桌面端配置并代理翻译请求。局域网共享可使用 0.0.0.0 或本机局域网 IP。" label="监听地址">
+              <TextInput
+                onChange={(event) => onSettingsChange({ ...settings, localProxyHost: event.currentTarget.value })}
+                placeholder="127.0.0.1"
+                value={settings.localProxyHost}
+              />
+            </Field>
+            <Field hint="如果端口被占用，请改为其他未占用端口，并在浏览器扩展中填写相同代理地址。" label="监听端口">
+              <TextInput
+                min={1}
+                max={65535}
+                onChange={(event) =>
+                  onSettingsChange({
+                    ...settings,
+                    localProxyPort: Number.parseInt(event.currentTarget.value, 10) || DEFAULT_SETTINGS.localProxyPort,
+                  })
+                }
+                type="number"
+                value={String(settings.localProxyPort)}
+              />
+            </Field>
+            <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">
+              扩展端代理地址：http://{settings.localProxyHost === '0.0.0.0' ? '127.0.0.1' : settings.localProxyHost}:{settings.localProxyPort}
             </div>
-          ) : null}
-        </div>
-      </Card>
+          </div>
+        </Card>
+      ) : null}
+
+      {globalSelectionAvailable ? (
+        <Card className="settings-wide" title="全局划词">
+          <div className="grid gap-4 p-5">
+            <Toggle checked={settings.globalSelectionEnabled} label="启用全局划词" onChange={(checked) => onSettingsChange({ ...settings, globalSelectionEnabled: checked })} />
+            <Toggle
+              checked={settings.globalSelectionClipboardFallbackEnabled}
+              label="启用兼容剪贴板兜底"
+              onChange={(checked) => onSettingsChange({ ...settings, globalSelectionClipboardFallbackEnabled: checked })}
+            />
+            <p className="text-xs leading-5 text-[var(--muted)]">
+              仅当 UI Automation 无法读取且前台进程未命中下方黑名单时，才会临时发送 Ctrl+C 读取文本。
+            </p>
+            <Field hint="一行一个进程名，例如 explorer.exe、Code.exe、chrome.exe。命中后不会读取该软件中的选中文本，也不会触发兼容兜底。" label="进程黑名单">
+              <textarea
+                className="settings-textarea"
+                onChange={(event) =>
+                  onSettingsChange({
+                    ...settings,
+                    globalSelectionExcludedApps: event.currentTarget.value
+                      .split('\n')
+                      .map((item) => item.trim())
+                      .filter(Boolean),
+                  })
+                }
+                value={settings.globalSelectionExcludedApps.join('\n')}
+              />
+            </Field>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button disabled={isLoadingProcesses} onClick={loadRunningProcesses} size="sm" variant="secondary">
+                {isLoadingProcesses ? <RefreshCcw className="animate-spin" size={14} /> : <RefreshCcw size={14} />}
+                加载当前进程
+              </Button>
+              <span className="text-xs text-[var(--muted)]">勾选后会加入进程黑名单。</span>
+            </div>
+            {runningProcesses.length ? (
+              <div className="process-picker">
+                {runningProcesses.map((processName) => {
+                  const checked = settings.globalSelectionExcludedApps.some((item) => item.toLowerCase() === processName.toLowerCase());
+                  return (
+                    <label className="process-option" key={processName}>
+                      <input checked={checked} onChange={(event) => toggleExcludedProcess(processName, event.currentTarget.checked)} type="checkbox" />
+                      <span>{processName}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        </Card>
+      ) : null}
 
       <Card className="settings-wide" title="在线更新">
         <div className="grid gap-4 p-5 text-sm">
@@ -1976,7 +2311,11 @@ function formatDateTime(value: Date) {
 }
 
 function formatCharacterCount(value: number) {
-  return `${new Intl.NumberFormat('zh-CN').format(value)} 字符`;
+  return `${formatCharacterNumber(value)} 字符`;
+}
+
+function formatCharacterNumber(value: number) {
+  return new Intl.NumberFormat('zh-CN').format(value);
 }
 
 function currentUsageMonthKey(date = new Date()) {
@@ -2008,10 +2347,22 @@ function canUseTauri() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+function isMobileRuntime() {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
 async function openExternalUrl(url: string) {
   if (canUseTauri()) {
-    await invoke('open_external_url', { url });
-    return;
+    try {
+      await invoke('open_external_url', { url });
+      return;
+    } catch (error) {
+      console.error('Failed to open external URL in the system browser', error);
+      return;
+    }
   }
   window.open(url, '_blank', 'noopener,noreferrer');
 }
@@ -2116,6 +2467,18 @@ function mergeStoredSettings(storedSettings: Partial<AppSettings>, storedSecrets
     aiFallbackEnabled: storedSettings.aiFallbackEnabled ?? DEFAULT_SETTINGS.aiFallbackEnabled,
     aiSources,
     ...storedSecrets,
+  };
+}
+
+function normalizeSettingsForRuntime(settings: AppSettings): AppSettings {
+  if (!isMobileRuntime()) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    globalSelectionEnabled: false,
+    globalSelectionClipboardFallbackEnabled: false,
   };
 }
 
