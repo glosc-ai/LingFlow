@@ -3,24 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="LingFlow 灵流是一款开源、跨平台的双语阅读与翻译工具，支持浏览器双语注入、桌面划词浮窗、本地代理与多服务源 AI 翻译。">
-  <title>灵流 LingFlow - 让翻译自然流入阅读</title>
+  <meta name="description" content="LingFlow 灵流是一款开源跨平台翻译工具，支持网页双语阅读、桌面划词翻译、Android 移动端工作台和多引擎 AI 翻译。">
+  <title>灵流 LingFlow - 开源跨平台翻译工具</title>
   <style>
     :root {
       color-scheme: light;
-      --ink: #12151f;
-      --muted: #657184;
-      --soft: #eef3f6;
-      --paper: #fbfcfb;
-      --line: rgba(18, 21, 31, 0.1);
-      --panel: #ffffff;
-      --night: #111827;
-      --night-2: #18212f;
-      --blue: #2563eb;
-      --teal: #0ea5a4;
-      --green: #10b981;
-      --amber: #f5a524;
-      --shadow: 0 24px 80px rgba(16, 24, 40, 0.12);
+      --bg: #f7f4ed;
+      --paper: #fffdfa;
+      --ink: #101113;
+      --muted: #5f6670;
+      --subtle: #8b928d;
+      --line: rgba(16, 17, 19, .1);
+      --line-strong: rgba(16, 17, 19, .18);
+      --blue: #1f7ae0;
+      --teal: #0f9f95;
+      --green: #16b77c;
+      --cream: #efe9dc;
+      --dark: #111315;
+      --dark-2: #1b2028;
+      --shadow: 0 30px 90px rgba(16, 17, 19, .13);
       --ease: cubic-bezier(.2, .8, .2, 1);
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
     }
@@ -31,19 +32,21 @@
       margin: 0;
       color: var(--ink);
       background:
-        radial-gradient(circle at 78% 6%, rgba(16, 185, 129, 0.16), transparent 28rem),
-        radial-gradient(circle at 8% 12%, rgba(37, 99, 235, 0.12), transparent 24rem),
-        linear-gradient(180deg, #ffffff 0%, #f5f8f8 46%, #eef4f2 100%);
+        radial-gradient(circle at 74% 28%, rgba(15, 159, 149, .11), transparent 24rem),
+        radial-gradient(circle at 15% 9%, rgba(31, 122, 224, .08), transparent 22rem),
+        linear-gradient(rgba(16, 17, 19, .055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(16, 17, 19, .055) 1px, transparent 1px),
+        var(--bg);
+      background-size: auto, auto, 56px 56px, 56px 56px, auto;
       text-rendering: optimizeLegibility;
       -webkit-font-smoothing: antialiased;
       overflow-x: hidden;
     }
 
     a { color: inherit; text-decoration: none; }
-    button, a { -webkit-tap-highlight-color: transparent; }
 
     .shell {
-      width: min(1180px, calc(100% - 40px));
+      width: min(1216px, calc(100% - 48px));
       margin: 0 auto;
     }
 
@@ -51,422 +54,439 @@
       position: sticky;
       top: 0;
       z-index: 20;
-      border-bottom: 1px solid rgba(18, 21, 31, 0.08);
-      background: rgba(251, 252, 251, 0.78);
+      border-bottom: 1px solid var(--line);
+      background: rgba(247, 244, 237, .82);
       backdrop-filter: blur(18px);
     }
 
     .nav-inner {
-      height: 68px;
-      display: flex;
+      height: 66px;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
       align-items: center;
-      justify-content: space-between;
       gap: 24px;
     }
 
-    .brand {
-      display: inline-flex;
+    .brand,
+    .nav-links,
+    .nav-actions,
+    .button,
+    .chip,
+    .device-tab,
+    .provider-row,
+    .tiny-status,
+    .mini-nav {
+      display: flex;
       align-items: center;
-      gap: 10px;
-      font-weight: 780;
+    }
+
+    .brand {
+      gap: 12px;
+      font-size: 17px;
+      font-weight: 800;
       letter-spacing: 0;
     }
 
-    .logo {
-      width: 34px;
-      height: 34px;
-      flex: 0 0 34px;
-      filter: drop-shadow(0 10px 18px rgba(14, 165, 164, 0.18));
+    .brand-mark {
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--dark);
+      box-shadow: 0 14px 28px rgba(16, 17, 19, .16);
     }
 
+    .brand-mark svg { width: 23px; height: 23px; }
+
     .nav-links {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      color: #536072;
-      font-size: 14px;
+      justify-content: center;
+      gap: 5px;
+      padding: 4px;
+      border: 1px solid rgba(16, 17, 19, .06);
+      border-radius: 999px;
+      background: rgba(255, 253, 250, .72);
     }
 
     .nav-links a {
-      padding: 9px 12px;
-      border-radius: 8px;
-      transition: color 180ms var(--ease), background 180ms var(--ease), transform 180ms var(--ease);
+      padding: 9px 16px;
+      border-radius: 999px;
+      color: #424851;
+      font-size: 14px;
+      transition: background 180ms var(--ease), color 180ms var(--ease), transform 180ms var(--ease);
     }
 
-    .nav-links a:hover {
+    .nav-links a:hover,
+    .nav-links a.active {
       color: var(--ink);
-      background: rgba(18, 21, 31, 0.055);
+      background: #fff;
+      box-shadow: 0 8px 22px rgba(16, 17, 19, .06);
       transform: translateY(-1px);
     }
 
     .nav-actions {
-      display: flex;
-      align-items: center;
+      justify-content: flex-end;
       gap: 10px;
     }
 
-    .btn {
-      display: inline-flex;
-      align-items: center;
+    .button {
       justify-content: center;
       gap: 8px;
-      min-height: 42px;
-      padding: 0 16px;
-      border: 1px solid transparent;
-      border-radius: 8px;
-      font-weight: 700;
+      min-height: 46px;
+      padding: 0 18px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--ink);
       font-size: 14px;
-      transition: transform 180ms var(--ease), box-shadow 180ms var(--ease), border-color 180ms var(--ease), background 180ms var(--ease);
+      font-weight: 800;
       white-space: nowrap;
+      box-shadow: 0 14px 34px rgba(16, 17, 19, .06);
+      transition: transform 180ms var(--ease), box-shadow 180ms var(--ease), background 180ms var(--ease);
     }
 
-    .btn:hover { transform: translateY(-2px); }
-    .btn-primary {
-      color: white;
-      background: linear-gradient(135deg, var(--blue), var(--teal) 58%, var(--green));
-      box-shadow: 0 16px 34px rgba(37, 99, 235, 0.24);
+    .button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 20px 44px rgba(16, 17, 19, .11);
     }
-    .btn-primary:hover { box-shadow: 0 22px 44px rgba(14, 165, 164, 0.28); }
-    .btn-secondary {
-      color: var(--ink);
-      background: rgba(255, 255, 255, 0.72);
-      border-color: var(--line);
-      box-shadow: 0 10px 28px rgba(16, 24, 40, 0.07);
+
+    .button.primary {
+      border-color: var(--dark);
+      background: var(--dark);
+      color: #fff;
     }
-    .btn-secondary:hover { border-color: rgba(14, 165, 164, 0.38); }
 
     .hero {
-      position: relative;
-      padding: 86px 0 72px;
-      overflow: hidden;
+      min-height: calc(100vh - 66px);
+      padding: 108px 0 74px;
+      display: grid;
+      align-items: center;
     }
 
     .hero-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.02fr) minmax(420px, .98fr);
+      grid-template-columns: minmax(0, 1fr) minmax(420px, .92fr);
       align-items: center;
-      gap: 56px;
+      gap: clamp(36px, 6vw, 88px);
     }
 
-    .hero-grid > * { min-width: 0; }
+    .hero-copy-block { min-width: 0; }
 
-    .eyebrow {
-      display: inline-flex;
-      align-items: center;
-      gap: 9px;
-      padding: 7px 11px;
-      border: 1px solid rgba(14, 165, 164, 0.22);
+    .chip {
+      width: max-content;
+      max-width: 100%;
+      gap: 10px;
+      padding: 10px 16px;
+      border: 1px solid var(--line);
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.62);
-      color: #25605d;
-      font-size: 13px;
-      font-weight: 760;
-      animation: enter 720ms var(--ease) both;
+      background: rgba(255, 253, 250, .72);
+      color: #234640;
+      font-size: 14px;
+      font-weight: 800;
+      animation: fade-up 700ms var(--ease) both;
     }
 
-    .pulse {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.13);
-    }
+    .chip svg { color: var(--teal); }
 
     h1 {
-      max-width: 720px;
+      max-width: 700px;
       margin: 24px 0 0;
-      font-size: clamp(46px, 7vw, 86px);
-      line-height: .96;
+      font-size: clamp(64px, 8.4vw, 116px);
+      line-height: .88;
       letter-spacing: 0;
       text-wrap: balance;
-      overflow-wrap: anywhere;
-      animation: enter 820ms 80ms var(--ease) both;
+      animation: fade-up 780ms 80ms var(--ease) both;
     }
 
     h1 span { display: block; }
 
-    .hero-copy {
-      max-width: 660px;
-      margin: 24px 0 0;
-      color: var(--muted);
-      font-size: clamp(17px, 2vw, 20px);
-      line-height: 1.75;
+    .hero-lead {
+      max-width: 640px;
+      margin: 28px 0 0;
+      color: #2c3541;
+      font-size: clamp(19px, 2vw, 23px);
+      line-height: 1.72;
       text-wrap: pretty;
-      overflow-wrap: anywhere;
-      animation: enter 820ms 160ms var(--ease) both;
+      animation: fade-up 780ms 160ms var(--ease) both;
     }
 
-    .hero-cta {
+    .hero-actions {
       display: flex;
       flex-wrap: wrap;
       gap: 12px;
-      margin-top: 34px;
-      animation: enter 820ms 240ms var(--ease) both;
+      margin-top: 36px;
+      animation: fade-up 780ms 240ms var(--ease) both;
     }
 
-    .hero-meta {
+    .hero-facts {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      max-width: 660px;
-      margin-top: 34px;
-      animation: enter 820ms 320ms var(--ease) both;
+      gap: 18px;
+      max-width: 640px;
+      margin-top: 96px;
+      animation: fade-up 780ms 320ms var(--ease) both;
     }
 
-    .metric {
-      padding: 14px 16px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.56);
+    .fact strong {
+      display: block;
+      font-size: 30px;
+      line-height: 1;
+      letter-spacing: 0;
     }
 
-    .metric strong { display: block; font-size: 21px; letter-spacing: 0; }
-    .metric span { display: block; margin-top: 5px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .fact span {
+      display: block;
+      margin-top: 7px;
+      color: #323943;
+      font-size: 14px;
+      line-height: 1.35;
+    }
 
-    .stage {
+    .hero-visual {
       position: relative;
-      min-height: 590px;
-      animation: enter 900ms 180ms var(--ease) both;
+      min-height: 620px;
+      animation: fade-up 850ms 180ms var(--ease) both;
     }
 
-    .desktop-window {
+    .desktop-frame {
       position: absolute;
-      inset: 36px 0 auto auto;
-      width: min(560px, 100%);
-      border: 1px solid rgba(255,255,255,.22);
-      border-radius: 18px;
-      background: linear-gradient(145deg, #111827, #18212f);
-      box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.12);
+      top: 70px;
+      right: 0;
+      width: min(610px, 100%);
+      border: 10px solid var(--dark);
+      border-radius: 28px;
+      background: #f9fbfd;
+      box-shadow: var(--shadow);
       overflow: hidden;
-      transform: perspective(1100px) rotateY(-7deg) rotateX(3deg);
+      transform: rotate(-1.5deg);
     }
 
-    .window-bar {
-      height: 42px;
+    .frame-bar {
+      height: 48px;
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 0 16px;
-      border-bottom: 1px solid rgba(255,255,255,.08);
-      color: #9fb0c6;
-      font-size: 12px;
+      padding: 0 18px;
+      border-bottom: 1px solid rgba(16, 17, 19, .08);
+      background: #fff;
+      color: #596271;
+      font-size: 13px;
+      font-weight: 700;
     }
 
-    .dot { width: 10px; height: 10px; border-radius: 50%; }
-    .dot.red { background: #ff6b62; }
-    .dot.yellow { background: #f6be4f; }
-    .dot.green { background: #55c95a; }
-    .window-title { margin-left: 8px; }
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+    }
 
-    .app-ui {
+    .dot.red { background: #ff6b5f; }
+    .dot.yellow { background: #f5bd48; }
+    .dot.green { background: #57c866; }
+
+    .desktop-ui {
       display: grid;
-      grid-template-columns: 116px 1fr 142px;
-      min-height: 392px;
+      grid-template-columns: 116px 1fr 150px;
+      min-height: 382px;
+      background: #f7f9fb;
     }
 
-    .sidebar {
-      padding: 18px 12px;
-      border-right: 1px solid rgba(255,255,255,.08);
-      background: rgba(255,255,255,.03);
+    .device-sidebar {
+      padding: 18px 14px;
+      border-right: 1px solid rgba(16, 17, 19, .07);
+      background: #eef3f4;
     }
 
-    .nav-pill {
-      height: 28px;
-      margin-bottom: 8px;
-      border-radius: 7px;
-      background: rgba(255,255,255,.06);
-    }
-    .nav-pill.active { background: rgba(14, 165, 164, .2); box-shadow: inset 3px 0 0 var(--teal); }
-
-    .workspace {
-      padding: 20px;
-      background: linear-gradient(180deg, rgba(255,255,255,.035), transparent);
+    .side-pill {
+      height: 30px;
+      margin-bottom: 10px;
+      border-radius: 9px;
+      background: rgba(16, 17, 19, .08);
     }
 
-    .status-line {
-      display: flex;
-      align-items: center;
+    .side-pill.active { background: rgba(15, 159, 149, .18); }
+
+    .workbench {
+      padding: 22px;
+    }
+
+    .tiny-status {
       gap: 8px;
-      height: 36px;
+      height: 38px;
       padding: 0 12px;
-      border: 1px solid rgba(255,255,255,.09);
-      border-radius: 8px;
-      color: #c6d3e3;
-      background: rgba(255,255,255,.04);
-      font-size: 12px;
+      border: 1px solid rgba(16, 17, 19, .09);
+      border-radius: 10px;
+      background: #fff;
+      color: #34404d;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
     }
 
-    .status-line .pulse { width: 6px; height: 6px; box-shadow: 0 0 0 5px rgba(16,185,129,.12); }
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 0 6px rgba(15, 159, 149, .1);
+    }
 
-    .translate-grid {
-      position: relative;
+    .translate-panels {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin-top: 16px;
+      gap: 14px;
+      margin-top: 18px;
     }
 
-    .text-pane {
-      min-height: 200px;
-      padding: 14px;
-      border: 1px solid rgba(255,255,255,.09);
-      border-radius: 8px;
-      background: rgba(255,255,255,.055);
+    .translate-panel {
+      min-height: 205px;
+      padding: 16px;
+      border: 1px solid rgba(16, 17, 19, .08);
+      border-radius: 12px;
+      background: #fff;
     }
 
-    .pane-label {
-      color: #9fb0c6;
+    .panel-label {
+      color: #657184;
       font-size: 11px;
-      font-weight: 700;
+      font-weight: 900;
       text-transform: uppercase;
     }
 
-    .line {
+    .mock-line {
       height: 8px;
-      margin-top: 14px;
+      margin-top: 15px;
       border-radius: 999px;
-      background: rgba(207, 221, 236, .2);
-      overflow: hidden;
+      background: #d8e0e7;
     }
-    .line.w1 { width: 92%; }
-    .line.w2 { width: 74%; }
-    .line.w3 { width: 84%; }
-    .line.w4 { width: 48%; }
-    .line.glow::after {
+
+    .mock-line.short { width: 58%; }
+    .mock-line.mid { width: 78%; }
+    .mock-line.accent { background: linear-gradient(90deg, var(--blue), var(--teal)); }
+
+    .provider-list {
+      padding: 22px 14px;
+      border-left: 1px solid rgba(16, 17, 19, .07);
+      background: #f0f4f5;
+    }
+
+    .provider-row {
+      gap: 8px;
+      min-height: 34px;
+      margin-bottom: 10px;
+      padding: 0 10px;
+      border: 1px solid rgba(16, 17, 19, .08);
+      border-radius: 10px;
+      background: #fff;
+      color: #343b44;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .provider-row::before {
       content: "";
-      display: block;
-      width: 55%;
-      height: 100%;
-      border-radius: inherit;
-      background: linear-gradient(90deg, var(--blue), var(--teal), var(--green));
-      animation: shimmer 2.7s var(--ease) infinite;
-    }
-
-    .provider-rail {
-      padding: 18px 12px;
-      border-left: 1px solid rgba(255,255,255,.08);
-    }
-
-    .provider-chip {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      height: 30px;
-      margin-bottom: 9px;
-      padding: 0 9px;
-      border: 1px solid rgba(255,255,255,.08);
-      border-radius: 8px;
-      color: #b9c7d8;
-      background: rgba(255,255,255,.04);
-      font-size: 11px;
-    }
-
-    .provider-chip::before {
-      content: "";
-      width: 6px;
-      height: 6px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: var(--green);
     }
 
-    .float-card {
+    .extension-card,
+    .mobile-card {
       position: absolute;
-      left: -8px;
-      bottom: 36px;
-      width: 260px;
-      padding: 14px;
-      border: 1px solid rgba(255,255,255,.6);
-      border-radius: 16px;
-      background: rgba(255,255,255,.86);
-      backdrop-filter: blur(16px);
-      box-shadow: 0 18px 60px rgba(17, 24, 39, .18);
-      animation: float 4.8s var(--ease) infinite;
+      border: 1px solid rgba(255, 255, 255, .74);
+      background: rgba(255, 253, 250, .88);
+      backdrop-filter: blur(18px);
+      box-shadow: 0 24px 70px rgba(16, 17, 19, .12);
     }
 
-    .float-head {
-      display: flex;
-      align-items: center;
+    .extension-card {
+      left: -10px;
+      bottom: 112px;
+      width: 280px;
+      padding: 16px;
+      border-radius: 20px;
+      animation: float 5s var(--ease) infinite;
+    }
+
+    .mobile-card {
+      right: 28px;
+      bottom: 0;
+      width: 190px;
+      padding: 12px;
+      border-radius: 30px;
+      border: 8px solid var(--dark);
+      background: #fbfcfd;
+    }
+
+    .mini-nav {
       justify-content: space-between;
-      gap: 12px;
-      color: var(--muted);
-      font-size: 12px;
+      color: #66717f;
+      font-size: 10px;
+      font-weight: 800;
     }
 
-    .translation {
-      margin: 12px 0 0;
-      font-size: 15px;
-      line-height: 1.55;
-      font-weight: 720;
+    .bubble {
+      margin-top: 12px;
+      padding: 10px;
+      border-radius: 14px;
+      background: #eef3f7;
+      color: #2a333d;
+      font-size: 11px;
+      line-height: 1.45;
     }
 
-    .browser-card {
-      position: absolute;
-      right: 38px;
-      bottom: 4px;
-      width: 310px;
-      padding: 14px;
-      border: 1px solid rgba(255,255,255,.58);
-      border-radius: 16px;
-      background: rgba(250, 252, 251, .88);
-      box-shadow: 0 18px 60px rgba(17, 24, 39, .16);
-      backdrop-filter: blur(16px);
-    }
-
-    .article-line {
-      height: 8px;
-      margin: 11px 0;
-      border-radius: 999px;
-      background: #dce5ea;
-    }
-    .article-line.translated {
-      background: linear-gradient(90deg, rgba(37,99,235,.24), rgba(14,165,164,.24));
+    .bubble.primary-bubble {
+      margin-left: 26px;
+      background: var(--blue);
+      color: #fff;
     }
 
     .section {
-      padding: 78px 0;
+      padding: 92px 0;
     }
 
     .section-head {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
       align-items: end;
-      justify-content: space-between;
-      gap: 24px;
-      margin-bottom: 28px;
+      gap: 40px;
+      margin-bottom: 34px;
     }
 
     h2 {
       max-width: 760px;
       margin: 0;
-      font-size: clamp(32px, 4vw, 54px);
-      line-height: 1.05;
+      font-size: clamp(38px, 5vw, 68px);
+      line-height: .98;
       letter-spacing: 0;
       text-wrap: balance;
     }
 
     .section-note {
-      max-width: 420px;
       margin: 0;
-      color: var(--muted);
-      line-height: 1.7;
+      color: #444c57;
+      font-size: 17px;
+      line-height: 1.8;
       text-wrap: pretty;
     }
 
-    .features {
+    .feature-grid {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 14px;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
     }
 
     .feature-card {
-      min-height: 250px;
-      padding: 24px;
+      min-height: 310px;
+      padding: 28px;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: rgba(255,255,255,.68);
-      box-shadow: 0 14px 44px rgba(16,24,40,.06);
+      background: rgba(255, 253, 250, .7);
+      box-shadow: 0 20px 55px rgba(16, 17, 19, .05);
       opacity: 0;
-      transform: translateY(24px);
-      transition: opacity 680ms var(--ease), transform 680ms var(--ease), border-color 220ms var(--ease), box-shadow 220ms var(--ease);
+      transform: translateY(28px);
+      transition: opacity 650ms var(--ease), transform 650ms var(--ease), background 220ms var(--ease), border-color 220ms var(--ease);
     }
 
     .feature-card.visible {
@@ -475,166 +495,221 @@
     }
 
     .feature-card:hover {
-      border-color: rgba(14,165,164,.32);
-      box-shadow: 0 22px 70px rgba(16,24,40,.10);
+      background: #fffdfa;
+      border-color: var(--line-strong);
       transform: translateY(-4px);
     }
 
-    .icon {
-      width: 46px;
-      height: 46px;
-      display: grid;
-      place-items: center;
-      border: 1px solid rgba(18,21,31,.09);
+    .feature-index {
+      display: inline-flex;
+      padding: 7px 11px;
+      border: 1px solid var(--line);
       border-radius: 8px;
+      color: var(--teal);
       background: #fff;
-      color: var(--blue);
-      margin-bottom: 28px;
+      font-size: 12px;
+      font-weight: 900;
     }
-
-    .feature-card:nth-child(2) .icon { color: var(--teal); }
-    .feature-card:nth-child(3) .icon { color: var(--green); }
-    .feature-card:nth-child(4) .icon { color: var(--amber); }
 
     .feature-card h3 {
-      margin: 0 0 12px;
-      font-size: 20px;
-      letter-spacing: 0;
+      margin: 54px 0 13px;
+      font-size: 26px;
+      line-height: 1.16;
     }
+
     .feature-card p {
       margin: 0;
-      color: var(--muted);
-      line-height: 1.75;
-      font-size: 15px;
-      text-wrap: pretty;
+      color: #4b535f;
+      font-size: 16px;
+      line-height: 1.78;
     }
 
-    .preview-band {
-      padding: 70px 0;
-      background: linear-gradient(180deg, rgba(17,24,39,.96), #15202c);
-      color: #f7fbff;
-      overflow: hidden;
-    }
-
-    .preview-band .section-note { color: #aab9c9; }
-
-    .marquee {
-      width: 100vw;
-      margin-left: calc(50% - 50vw);
-      margin-top: 34px;
-      overflow: hidden;
-      mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
-    }
-
-    .marquee-track {
-      display: flex;
-      gap: 18px;
-      width: max-content;
-      animation: scroll 28s linear infinite;
-    }
-
-    .screen {
-      width: 430px;
-      height: 270px;
-      flex: 0 0 auto;
-      border: 1px solid rgba(255,255,255,.12);
-      border-radius: 8px;
-      background: rgba(255,255,255,.055);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-      padding: 16px;
-    }
-
-    .screen-title {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 18px;
-      color: #d8e3ee;
-      font-size: 13px;
-      font-weight: 740;
-    }
-
-    .tag {
-      color: #8fe7d2;
-      font-family: ui-monospace, "SF Mono", Consolas, monospace;
-      font-size: 11px;
-      font-weight: 700;
-    }
-
-    .screen-grid {
+    .systems {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1.04fr .96fr;
+      gap: 18px;
+    }
+
+    .system-panel {
+      min-height: 520px;
+      padding: 32px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fffdfa;
+      box-shadow: 0 20px 60px rgba(16, 17, 19, .06);
+    }
+
+    .system-panel.dark-panel {
+      color: #f4f7f8;
+      background: var(--dark);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .system-panel h3 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 48px);
+      line-height: 1.05;
+      text-wrap: balance;
+    }
+
+    .system-panel p {
+      margin: 18px 0 0;
+      color: #525b65;
+      font-size: 16px;
+      line-height: 1.78;
+    }
+
+    .dark-panel p { color: #c7d0d7; }
+
+    .route-map {
+      margin-top: 34px;
+      display: grid;
       gap: 12px;
     }
 
-    .mini-pane {
-      min-height: 170px;
-      border: 1px solid rgba(255,255,255,.10);
+    .route-item {
+      padding: 15px 16px;
+      border: 1px solid rgba(255, 255, 255, .1);
       border-radius: 8px;
-      background: rgba(0,0,0,.13);
-      padding: 12px;
+      background: rgba(255, 255, 255, .055);
+      color: #eef5f7;
+      font-weight: 800;
     }
 
-    .mini-line {
-      height: 7px;
+    .route-item span {
+      display: block;
+      margin-top: 5px;
+      color: #aebcc6;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .provider-cloud {
+      margin-top: 34px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .provider-pill {
+      padding: 11px 14px;
       border-radius: 999px;
-      background: rgba(220,230,240,.22);
-      margin: 12px 0;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #262c33;
+      font-size: 14px;
+      font-weight: 850;
     }
 
-    .timeline {
+    .privacy-list {
+      margin-top: 32px;
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
       gap: 14px;
-      margin-top: 30px;
     }
 
-    .step {
-      padding: 24px;
+    .privacy-item {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 14px;
+      align-items: start;
+      padding: 16px;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: rgba(255,255,255,.66);
+      background: rgba(247, 244, 237, .66);
     }
 
-    .step b {
+    .privacy-item b {
       display: block;
-      color: var(--teal);
-      font-family: ui-monospace, "SF Mono", Consolas, monospace;
-      font-size: 13px;
-      margin-bottom: 12px;
+      margin-bottom: 4px;
     }
 
-    .step h3 { margin: 0 0 10px; font-size: 21px; }
-    .step p { margin: 0; color: var(--muted); line-height: 1.72; }
+    .privacy-icon {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--dark);
+      color: #fff;
+      font-weight: 900;
+    }
+
+    .flow-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 253, 250, .68);
+      overflow: hidden;
+    }
+
+    .flow-step {
+      min-height: 220px;
+      padding: 28px;
+      border-right: 1px solid var(--line);
+    }
+
+    .flow-step:last-child { border-right: 0; }
+
+    .flow-step b {
+      color: var(--teal);
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .flow-step h3 {
+      margin: 44px 0 12px;
+      font-size: 24px;
+    }
+
+    .flow-step p {
+      margin: 0;
+      color: #4b535f;
+      line-height: 1.72;
+    }
+
+    .cta {
+      padding-bottom: 104px;
+    }
 
     .cta-panel {
       display: grid;
-      grid-template-columns: 1fr auto;
+      grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
       gap: 28px;
-      padding: 36px;
-      border: 1px solid rgba(255,255,255,.2);
+      padding: 42px;
       border-radius: 8px;
-      color: white;
-      background:
-        linear-gradient(135deg, rgba(37,99,235,.98), rgba(14,165,164,.95) 54%, rgba(16,185,129,.92)),
-        #0ea5a4;
-      box-shadow: 0 24px 70px rgba(14, 165, 164, .28);
+      background: var(--dark);
+      color: #fff;
+      box-shadow: var(--shadow);
     }
 
-    .cta-panel h2 { font-size: clamp(28px, 4vw, 46px); }
-    .cta-panel p { max-width: 680px; color: rgba(255,255,255,.82); line-height: 1.75; }
-    .cta-panel .btn-secondary { background: rgba(255,255,255,.92); }
+    .cta-panel h2 {
+      font-size: clamp(38px, 5vw, 64px);
+    }
+
+    .cta-panel p {
+      max-width: 760px;
+      margin: 18px 0 0;
+      color: #cbd4dc;
+      font-size: 17px;
+      line-height: 1.8;
+    }
+
+    .cta-panel .button {
+      background: #fff;
+      color: var(--ink);
+    }
 
     footer {
-      padding: 38px 0 46px;
-      color: var(--muted);
+      padding: 34px 0 44px;
       border-top: 1px solid var(--line);
+      color: #5e6670;
     }
 
     .footer-inner {
       display: flex;
-      align-items: center;
       justify-content: space-between;
       gap: 24px;
       font-size: 14px;
@@ -642,71 +717,69 @@
 
     .footer-links {
       display: flex;
-      gap: 16px;
+      gap: 18px;
     }
 
     .footer-links a:hover { color: var(--ink); }
 
-    @keyframes enter {
+    @keyframes fade-up {
       from { opacity: 0; transform: translateY(24px); }
       to { opacity: 1; transform: translateY(0); }
     }
 
-    @keyframes shimmer {
-      0% { transform: translateX(-35%); }
-      50% { transform: translateX(60%); }
-      100% { transform: translateX(120%); }
-    }
-
     @keyframes float {
-      0%, 100% { transform: translate3d(0, 0, 0); }
-      50% { transform: translate3d(0, -12px, 0); }
-    }
-
-    @keyframes scroll {
-      from { transform: translateX(0); }
-      to { transform: translateX(-50%); }
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-12px); }
     }
 
     @media (max-width: 980px) {
-      .shell { width: min(100% - 28px, 760px); }
+      .shell { width: min(100% - 32px, 760px); }
+      .nav-inner { grid-template-columns: 1fr auto; }
       .nav-links { display: none; }
-      .hero { padding-top: 60px; }
-      .hero-grid { grid-template-columns: 1fr; gap: 34px; }
-      .stage { min-height: 500px; }
-      .desktop-window { position: relative; inset: auto; width: 100%; transform: none; }
-      .float-card { left: 16px; bottom: 18px; }
-      .browser-card { right: 12px; bottom: -22px; }
-      .features { grid-template-columns: repeat(2, 1fr); }
-      .section-head { display: block; }
-      .section-note { margin-top: 16px; }
-      .timeline { grid-template-columns: 1fr; }
+      .hero { padding-top: 62px; }
+      .hero-grid,
+      .section-head,
+      .systems,
       .cta-panel { grid-template-columns: 1fr; }
+      .hero-visual { min-height: 560px; }
+      .desktop-frame { position: relative; top: 0; width: 100%; transform: none; }
+      .extension-card { left: 12px; bottom: 30px; }
+      .mobile-card { right: 16px; bottom: -28px; }
+      .hero-facts { margin-top: 44px; }
+      .feature-grid { grid-template-columns: 1fr; }
+      .flow-strip { grid-template-columns: 1fr 1fr; }
+      .flow-step:nth-child(2) { border-right: 0; }
+      .flow-step:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
     }
 
     @media (max-width: 640px) {
-      .shell { width: min(360px, calc(100vw - 28px)); margin-left: 14px; margin-right: auto; }
-      .nav-inner { height: 62px; }
-      .nav-actions { display: none; }
-      .hero { padding: 44px 0 54px; }
-      h1 { font-size: clamp(36px, 10.8vw, 42px); line-height: 1.08; text-wrap: wrap; word-break: break-all; }
-      .hero-copy { max-width: 28em; font-size: 16px; text-wrap: wrap; word-break: break-all; }
-      .hero-meta { grid-template-columns: 1fr; }
-      .stage { min-height: 460px; }
-      .app-ui { grid-template-columns: 1fr; }
-      .sidebar, .provider-rail { display: none; }
-      .desktop-window { border-radius: 14px; }
-      .translate-grid { grid-template-columns: 1fr; }
-      .text-pane { min-height: 120px; }
-      .float-card { width: min(250px, calc(100% - 32px)); }
-      .browser-card { display: none; }
-      .features { grid-template-columns: 1fr; }
-      .feature-card { min-height: auto; }
-      .screen { width: 320px; height: 242px; }
-      .screen-grid { grid-template-columns: 1fr; }
-      .screen-grid .mini-pane:nth-child(2) { display: none; }
+      .shell { width: calc(100% - 28px); }
+      .nav-actions .button:not(.primary) { display: none; }
+      .button { min-height: 42px; padding: 0 14px; }
+      .brand { font-size: 16px; }
+      .hero { min-height: auto; padding: 44px 0 54px; }
+      .chip { font-size: 12px; }
+      h1 { font-size: clamp(54px, 17vw, 68px); line-height: .92; }
+      .hero-lead { font-size: 17px; }
+      .hero-facts { grid-template-columns: 1fr; gap: 14px; }
+      .hero-visual { min-height: 520px; }
+      .desktop-ui { grid-template-columns: 1fr; }
+      .device-sidebar,
+      .provider-list { display: none; }
+      .translate-panels { grid-template-columns: 1fr; }
+      .translate-panel { min-height: 122px; }
+      .extension-card { width: min(280px, calc(100% - 34px)); }
+      .mobile-card { display: none; }
+      .section { padding: 64px 0; }
+      h2 { font-size: clamp(38px, 12vw, 52px); }
+      .system-panel { min-height: auto; padding: 24px; }
+      .flow-strip { grid-template-columns: 1fr; }
+      .flow-step,
+      .flow-step:nth-child(2) { border-right: 0; border-bottom: 1px solid var(--line); }
+      .flow-step:last-child { border-bottom: 0; }
+      .cta-panel { padding: 28px; }
       .footer-inner { display: block; }
-      .footer-links { margin-top: 16px; flex-wrap: wrap; }
+      .footer-links { margin-top: 14px; flex-wrap: wrap; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -723,23 +796,25 @@
   <nav class="nav">
     <div class="shell nav-inner">
       <a class="brand" href="#top" aria-label="LingFlow 首页">
-        <svg class="logo" aria-hidden="true" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect width="64" height="64" rx="16" fill="url(#lf-bg)"/>
-          <path d="M18 18.5C18 15.46 20.46 13 23.5 13H43C46.31 13 49 15.69 49 19V35.5C49 38.54 46.54 41 43.5 41H34.5L24.8 49.19C23.82 50.02 22.3 49.32 22.3 48.03V41H21.2C18.33 41 16 38.67 16 35.8V24.8" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M23 25H38.5M23 32H34.5M41 48C44.6 45.78 47.27 42.95 49 39.5M14 16C17.52 13.24 21.55 11.9 26.1 12" stroke="#A7F3D0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-          <defs><linearGradient id="lf-bg" x1="11" y1="9" x2="55" y2="58" gradientUnits="userSpaceOnUse"><stop stop-color="#2563EB"/><stop offset=".52" stop-color="#0EA5A4"/><stop offset="1" stop-color="#10B981"/></linearGradient></defs>
-        </svg>
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none">
+            <path d="M7 8.8A4.8 4.8 0 0 1 11.8 4h10.4A4.8 4.8 0 0 1 27 8.8v8.7a4.8 4.8 0 0 1-4.8 4.8h-4.8L10.8 28v-5.7h-1A4.8 4.8 0 0 1 5 17.5v-5.8" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M11 11h9.5M11 15.5h7M22.5 26c2-1.3 3.4-2.9 4.3-4.8M4.8 7.5C7.1 5.7 9.7 4.8 12.7 4.8" stroke="#8FF3D6" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </span>
         <span>灵流 LingFlow</span>
       </a>
+
       <div class="nav-links" aria-label="主导航">
-        <a href="#features">功能特性</a>
-        <a href="#preview">产品预览</a>
-        <a href="#workflow">工作流</a>
-        <a href="https://github.com/glosc-ai/LingFlow/releases">下载</a>
+        <a class="active" href="#top">首页</a>
+        <a href="#features">功能</a>
+        <a href="#architecture">架构</a>
+        <a href="#workflow">场景</a>
       </div>
+
       <div class="nav-actions">
-        <a class="btn btn-secondary" href="https://github.com/glosc-ai/LingFlow" target="_blank" rel="noreferrer">GitHub Star</a>
-        <a class="btn btn-primary" href="https://github.com/glosc-ai/LingFlow/releases" target="_blank" rel="noreferrer">立即下载</a>
+        <a class="button" href="https://github.com/glosc-ai/LingFlow" target="_blank" rel="noreferrer">GitHub Star</a>
+        <a class="button primary" href="https://github.com/glosc-ai/LingFlow/releases" target="_blank" rel="noreferrer">下载</a>
       </div>
     </div>
   </nav>
@@ -747,71 +822,80 @@
   <main id="top">
     <section class="hero">
       <div class="shell hero-grid">
-        <div>
-          <div class="eyebrow"><span class="pulse"></span> 开源跨平台双语翻译工具</div>
-          <h1><span>让翻译自然</span><span>流入每一次阅读。</span></h1>
-          <p class="hero-copy">LingFlow 把网页双语注入、<wbr>桌面划词浮窗和 AI 翻译工作台<wbr>放进同一套本地架构。<wbr>你的服务源、模型、密钥与历史记录<wbr>优先留在自己的设备上，<wbr>翻译不再打断阅读节奏。</p>
-          <div class="hero-cta">
-            <a class="btn btn-primary" href="https://github.com/glosc-ai/LingFlow/releases" target="_blank" rel="noreferrer">下载 LingFlow</a>
-            <a class="btn btn-secondary" href="https://github.com/glosc-ai/LingFlow" target="_blank" rel="noreferrer">查看 GitHub</a>
+        <div class="hero-copy-block">
+          <div class="chip">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 4h10v16H7z"/><path d="M11 18h2"/></svg>
+            桌面端 · 浏览器扩展 · Android 移动端
           </div>
-          <div class="hero-meta" aria-label="核心能力">
-            <div class="metric"><strong>MV3</strong><span>Chrome / Edge 浏览器扩展</span></div>
-            <div class="metric"><strong>Tauri v2</strong><span>Windows 桌面与 Android 工程</span></div>
-            <div class="metric"><strong>BYO Key</strong><span>多服务源与本地密钥管理</span></div>
+          <h1><span>LingFlow</span><span>灵流</span></h1>
+          <p class="hero-lead">开源跨平台翻译软件，为网页、桌面和移动端提供一致的翻译体验。支持网页双语阅读、Windows 划词浮窗、Android 翻译工作台，以及多服务源 AI 翻译。</p>
+          <div class="hero-actions">
+            <a class="button primary" href="https://github.com/glosc-ai/LingFlow/releases" target="_blank" rel="noreferrer">下载 LingFlow</a>
+            <a class="button" href="https://github.com/glosc-ai/LingFlow" target="_blank" rel="noreferrer">查看源码</a>
+            <a class="button" href="https://one.gloscai.com/keys" target="_blank" rel="noreferrer">获取 Key</a>
+          </div>
+          <div class="hero-facts" aria-label="产品能力">
+            <div class="fact"><strong>7</strong><span>翻译服务与 AI Provider</span></div>
+            <div class="fact"><strong>本地</strong><span>配置、历史与密钥优先留在设备上</span></div>
+            <div class="fact"><strong>多端</strong><span>Windows、Chrome / Edge、Android</span></div>
           </div>
         </div>
 
-        <div class="stage" aria-label="LingFlow 产品界面示意">
-          <div class="desktop-window">
-            <div class="window-bar">
-              <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
-              <span class="window-title">LingFlow Workspace</span>
+        <div class="hero-visual" aria-label="LingFlow 多端产品界面示意">
+          <div class="desktop-frame">
+            <div class="frame-bar">
+              <span class="dot red"></span>
+              <span class="dot yellow"></span>
+              <span class="dot green"></span>
+              <span style="margin-left:8px">LingFlow 工作台</span>
             </div>
-            <div class="app-ui">
-              <aside class="sidebar">
-                <div class="nav-pill active"></div>
-                <div class="nav-pill"></div>
-                <div class="nav-pill"></div>
-                <div class="nav-pill"></div>
+            <div class="desktop-ui">
+              <aside class="device-sidebar">
+                <div class="side-pill active"></div>
+                <div class="side-pill"></div>
+                <div class="side-pill"></div>
+                <div class="side-pill"></div>
               </aside>
-              <section class="workspace">
-                <div class="status-line"><span class="pulse"></span> 本地代理在线 · AI 服务源自动回退</div>
-                <div class="translate-grid">
-                  <div class="text-pane">
-                    <div class="pane-label">Source</div>
-                    <div class="line w1"></div>
-                    <div class="line w2"></div>
-                    <div class="line w3"></div>
-                    <div class="line w4"></div>
+              <section class="workbench">
+                <div class="tiny-status"><span class="pulse"></span>本地代理在线 · 服务源自动回退</div>
+                <div class="translate-panels">
+                  <div class="translate-panel">
+                    <div class="panel-label">Source</div>
+                    <div class="mock-line mid"></div>
+                    <div class="mock-line"></div>
+                    <div class="mock-line mid"></div>
+                    <div class="mock-line short"></div>
                   </div>
-                  <div class="text-pane">
-                    <div class="pane-label">Translation</div>
-                    <div class="line w1 glow"></div>
-                    <div class="line w2 glow"></div>
-                    <div class="line w3 glow"></div>
-                    <div class="line w4 glow"></div>
+                  <div class="translate-panel">
+                    <div class="panel-label">Translation</div>
+                    <div class="mock-line accent"></div>
+                    <div class="mock-line accent mid"></div>
+                    <div class="mock-line accent"></div>
+                    <div class="mock-line accent short"></div>
                   </div>
                 </div>
               </section>
-              <aside class="provider-rail">
-                <div class="provider-chip">OpenAI Compatible</div>
-                <div class="provider-chip">DeepL</div>
-                <div class="provider-chip">Microsoft</div>
-                <div class="provider-chip">Baidu</div>
+              <aside class="provider-list">
+                <div class="provider-row">AI 翻译</div>
+                <div class="provider-row">DeepL</div>
+                <div class="provider-row">Microsoft</div>
+                <div class="provider-row">百度翻译</div>
               </aside>
             </div>
           </div>
-          <div class="float-card">
-            <div class="float-head"><span>划词浮窗</span><span>287ms</span></div>
-            <p class="translation">Machine learning 让跨语言阅读变得更轻。</p>
+
+          <div class="extension-card">
+            <div style="font-weight:900">网页双语注入</div>
+            <div class="mock-line" style="width:92%"></div>
+            <div class="mock-line accent" style="width:78%; opacity:.45"></div>
+            <div class="mock-line" style="width:96%"></div>
+            <div class="mock-line accent" style="width:70%; opacity:.45"></div>
           </div>
-          <div class="browser-card">
-            <strong>网页双语注入</strong>
-            <div class="article-line" style="width:92%"></div>
-            <div class="article-line translated" style="width:82%"></div>
-            <div class="article-line" style="width:96%"></div>
-            <div class="article-line translated" style="width:76%"></div>
+
+          <div class="mobile-card">
+            <div class="mini-nav"><span>翻译</span><span>•••</span></div>
+            <div class="bubble primary-bubble">帮我翻译这段网页选区</div>
+            <div class="bubble">已使用桌面端配置完成翻译，并记录到本地历史。</div>
           </div>
         </div>
       </div>
@@ -820,83 +904,71 @@
     <section class="section" id="features">
       <div class="shell">
         <div class="section-head">
-          <h2>翻译能力集中，使用场景分散到你真正阅读的地方。</h2>
-          <p class="section-note">LingFlow 的核心不是再造一个在线翻译站，而是让浏览器、桌面客户端和移动端工作台复用同一套翻译调度能力。</p>
+          <h2>把翻译放进真正的阅读现场</h2>
+          <p class="section-note">LingFlow 不要求你离开当前页面、应用或设备。它把翻译入口放到阅读发生的地方，再把服务配置统一收拢起来。</p>
         </div>
-        <div class="features">
+
+        <div class="feature-grid">
           <article class="feature-card">
-            <div class="icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16"/><path d="M4 12h10"/><path d="M4 19h7"/><path d="M17 14l3 3-3 3"/><path d="M14 17h6"/></svg>
-            </div>
-            <h3>网页双语阅读</h3>
-            <p>浏览器扩展抽取可读正文段落，向页面注入双语内容，并支持清理与去重，适合长文、文档和资料检索。</p>
+            <span class="feature-index">网页阅读</span>
+            <h3>双语内容直接进入页面</h3>
+            <p>浏览器扩展会抽取可读正文段落，将译文注入到原页面中，并支持清理和去重，适合阅读长文、技术文档和外文资料。</p>
           </article>
           <article class="feature-card">
-            <div class="icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
-            </div>
-            <h3>桌面划词浮窗</h3>
-            <p>Windows 客户端通过全局划词与本地浮窗接住选中文本，优先使用 UI Automation，不主动污染剪贴板。</p>
+            <span class="feature-index">桌面划词</span>
+            <h3>选中文本即可唤起浮窗</h3>
+            <p>Windows 客户端支持全局划词悬浮窗，默认通过 UI Automation 读取选区，不主动模拟复制，尽量减少对剪贴板的打扰。</p>
           </article>
           <article class="feature-card">
-            <div class="icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M5 8h14"/><path d="M7 16h10"/><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/></svg>
-            </div>
-            <h3>多服务源调度</h3>
-            <p>内置 Google、百度、DeepL、Microsoft、有道、腾讯云与 OpenAI-compatible AI 翻译，并支持服务源和模型回退。</p>
-          </article>
-          <article class="feature-card">
-            <div class="icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/><path d="M12 15v2"/></svg>
-            </div>
-            <h3>本地优先隐私</h3>
-            <p>配置和历史保存在本地 SQLite，桌面密钥进入系统凭据库；扩展默认经本地代理复用桌面端配置。</p>
+            <span class="feature-index">移动端</span>
+            <h3>Android 工作台复用同一核心</h3>
+            <p>Tauri Android 工程已接入同一套 React 控制台和翻译核心，适合移动端输入、复制译文、查看历史和管理服务源。</p>
           </article>
         </div>
       </div>
     </section>
 
-    <section class="preview-band" id="preview">
+    <section class="section" id="architecture">
       <div class="shell">
         <div class="section-head">
-          <h2>一个工作台，连接浏览器、桌面与服务源。</h2>
-          <p class="section-note">下面是用 CSS 构建的产品界面跑马灯，模拟翻译工作台、扩展弹窗、历史记录和服务源配置的真实信息架构。</p>
+          <h2>多引擎翻译 本地优先管理</h2>
+          <p class="section-note">你可以接入常用云翻译，也可以接入兼容 OpenAI 的 AI 服务。密钥、配置和历史由本地客户端管理，浏览器扩展默认复用桌面端能力。</p>
         </div>
-      </div>
-      <div class="marquee" aria-hidden="true">
-        <div class="marquee-track">
-          <div class="screen">
-            <div class="screen-title"><span>翻译工作台</span><span class="tag">AUTO -> zh-CN</span></div>
-            <div class="screen-grid"><div class="mini-pane"><div class="mini-line" style="width:91%"></div><div class="mini-line" style="width:74%"></div><div class="mini-line" style="width:83%"></div></div><div class="mini-pane"><div class="mini-line" style="width:88%;background:rgba(16,185,129,.32)"></div><div class="mini-line" style="width:66%;background:rgba(16,185,129,.25)"></div><div class="mini-line" style="width:78%;background:rgba(16,185,129,.28)"></div></div></div>
-          </div>
-          <div class="screen">
-            <div class="screen-title"><span>浏览器扩展</span><span class="tag">127.0.0.1:47631</span></div>
-            <div class="mini-pane"><div class="mini-line" style="width:94%"></div><div class="mini-line" style="width:80%;background:rgba(37,99,235,.32)"></div><div class="mini-line" style="width:76%"></div><div class="mini-line" style="width:70%;background:rgba(37,99,235,.28)"></div></div>
-          </div>
-          <div class="screen">
-            <div class="screen-title"><span>服务源配置</span><span class="tag">fallback on</span></div>
-            <div class="mini-pane"><div class="provider-chip">AI Source 01</div><div class="provider-chip">DeepL API</div><div class="provider-chip">Microsoft Translator</div><div class="provider-chip">Tencent TMT</div></div>
-          </div>
-          <div class="screen">
-            <div class="screen-title"><span>翻译历史</span><span class="tag">local SQLite</span></div>
-            <div class="mini-pane"><div class="mini-line" style="width:96%"></div><div class="mini-line" style="width:92%"></div><div class="mini-line" style="width:84%"></div><div class="mini-line" style="width:89%"></div></div>
-          </div>
-          <div class="screen">
-            <div class="screen-title"><span>翻译工作台</span><span class="tag">AUTO -> zh-CN</span></div>
-            <div class="screen-grid"><div class="mini-pane"><div class="mini-line" style="width:91%"></div><div class="mini-line" style="width:74%"></div><div class="mini-line" style="width:83%"></div></div><div class="mini-pane"><div class="mini-line" style="width:88%;background:rgba(16,185,129,.32)"></div><div class="mini-line" style="width:66%;background:rgba(16,185,129,.25)"></div><div class="mini-line" style="width:78%;background:rgba(16,185,129,.28)"></div></div></div>
-          </div>
-          <div class="screen">
-            <div class="screen-title"><span>浏览器扩展</span><span class="tag">127.0.0.1:47631</span></div>
-            <div class="mini-pane"><div class="mini-line" style="width:94%"></div><div class="mini-line" style="width:80%;background:rgba(37,99,235,.32)"></div><div class="mini-line" style="width:76%"></div><div class="mini-line" style="width:70%;background:rgba(37,99,235,.28)"></div></div>
-          </div>
-          <div class="screen">
-            <div class="screen-title"><span>服务源配置</span><span class="tag">fallback on</span></div>
-            <div class="mini-pane"><div class="provider-chip">AI Source 01</div><div class="provider-chip">DeepL API</div><div class="provider-chip">Microsoft Translator</div><div class="provider-chip">Tencent TMT</div></div>
-          </div>
-          <div class="screen">
-            <div class="screen-title"><span>翻译历史</span><span class="tag">local SQLite</span></div>
-            <div class="mini-pane"><div class="mini-line" style="width:96%"></div><div class="mini-line" style="width:92%"></div><div class="mini-line" style="width:84%"></div><div class="mini-line" style="width:89%"></div></div>
-          </div>
+
+        <div class="systems">
+          <article class="system-panel dark-panel">
+            <h3>从扩展到桌面端的本地通道</h3>
+            <p>浏览器扩展默认连接桌面端代理，读取当前服务源配置，并由桌面端转发翻译请求。网页选区也可以上报到桌面端，触发同一个划词浮窗。</p>
+            <div class="route-map">
+              <div class="route-item">Chrome / Edge 扩展<span>页面双语翻译、选区上报、清理注入内容</span></div>
+              <div class="route-item">127.0.0.1:47631 本地代理<span>设置同步、请求转发、用量回传</span></div>
+              <div class="route-item">Tauri 桌面客户端<span>系统凭据库、SQLite、全局划词与在线更新</span></div>
+            </div>
+          </article>
+
+          <article class="system-panel">
+            <h3>选择你信任的翻译服务</h3>
+            <p>LingFlow 支持多个 Provider，并允许 AI 服务源拖拽排序、多个模型依次尝试，以及服务源自动回退。</p>
+            <div class="provider-cloud" aria-label="支持的翻译服务">
+              <span class="provider-pill">AI 翻译</span>
+              <span class="provider-pill">Google Cloud</span>
+              <span class="provider-pill">百度翻译</span>
+              <span class="provider-pill">DeepL</span>
+              <span class="provider-pill">Microsoft</span>
+              <span class="provider-pill">有道智云</span>
+              <span class="provider-pill">腾讯云 TMT</span>
+            </div>
+            <div class="privacy-list">
+              <div class="privacy-item">
+                <span class="privacy-icon">1</span>
+                <div><b>密钥留在本机</b><span>桌面端密钥保存到系统凭据库，Android 端随本机 app data 持久化。</span></div>
+              </div>
+              <div class="privacy-item">
+                <span class="privacy-icon">2</span>
+                <div><b>历史本地保存</b><span>普通配置、月度统计和翻译历史保存到本地 SQLite。</span></div>
+              </div>
+            </div>
+          </article>
         </div>
       </div>
     </section>
@@ -904,25 +976,43 @@
     <section class="section" id="workflow">
       <div class="shell">
         <div class="section-head">
-          <h2>从网页到桌面，翻译路径保持一致。</h2>
-          <p class="section-note">扩展不直接保存你的服务商密钥，默认交给桌面端本地代理转发；核心调度与缓存逻辑由共享包复用。</p>
+          <h2>一套工作流 覆盖四类高频动作</h2>
+          <p class="section-note">从查资料到写文档，从桌面应用到移动端，LingFlow 用同一套核心能力承接不同翻译入口。</p>
         </div>
-        <div class="timeline">
-          <div class="step"><b>01</b><h3>选择文本或页面</h3><p>在网页中整页翻译、清理双语注入，或在桌面任意应用中划词触发浮窗。</p></div>
-          <div class="step"><b>02</b><h3>本地调度服务源</h3><p>LingFlow 根据当前配置调用 AI 或云翻译 Provider，支持模型顺序尝试与失败回退。</p></div>
-          <div class="step"><b>03</b><h3>返回阅读现场</h3><p>译文以网页双语、工作台结果、历史记录或桌面浮窗出现，不把你从上下文里拽走。</p></div>
+
+        <div class="flow-strip">
+          <div class="flow-step">
+            <b>01</b>
+            <h3>整页阅读</h3>
+            <p>翻译当前网页正文，保留原文结构，减少复制粘贴。</p>
+          </div>
+          <div class="flow-step">
+            <b>02</b>
+            <h3>划词查询</h3>
+            <p>选中任意文本，以浮窗方式快速查看译文。</p>
+          </div>
+          <div class="flow-step">
+            <b>03</b>
+            <h3>工作台翻译</h3>
+            <p>输入、复制、查看历史，并切换目标语言和 Provider。</p>
+          </div>
+          <div class="flow-step">
+            <b>04</b>
+            <h3>服务管理</h3>
+            <p>管理 API Key、AI 模型、回退策略和服务可用性。</p>
+          </div>
         </div>
       </div>
     </section>
 
-    <section class="section">
+    <section class="cta">
       <div class="shell">
         <div class="cta-panel">
           <div>
-            <h2>为开源翻译工作流，装上一条更顺的水路。</h2>
-            <p>LingFlow 仍在持续建设中：Windows 客户端、Chrome / Edge 扩展、Android 工程与多 Provider 核心已经就位。欢迎下载试用、提 issue，或一起把 PDF 阅读器、移动端体验和发布链路推进到下一站。</p>
+            <h2>让翻译工具跟上你的阅读节奏</h2>
+            <p>下载 LingFlow 桌面端和浏览器扩展，配置你自己的翻译服务。项目开源，欢迎试用、反馈，也欢迎一起完善 PDF 阅读器、移动端体验和发布链路。</p>
           </div>
-          <a class="btn btn-secondary" href="https://github.com/glosc-ai/LingFlow" target="_blank" rel="noreferrer">参与开源</a>
+          <a class="button" href="https://github.com/glosc-ai/LingFlow/releases" target="_blank" rel="noreferrer">前往下载</a>
         </div>
       </div>
     </section>
@@ -930,7 +1020,7 @@
 
   <footer>
     <div class="shell footer-inner">
-      <div>© 2026 LingFlow. Open source translation for real reading.</div>
+      <div>© 2026 LingFlow. Open source translation across devices.</div>
       <div class="footer-links">
         <a href="https://github.com/glosc-ai/LingFlow" target="_blank" rel="noreferrer">GitHub</a>
         <a href="https://github.com/glosc-ai/LingFlow/releases" target="_blank" rel="noreferrer">Releases</a>
@@ -947,7 +1037,7 @@
           observer.unobserve(entry.target);
         }
       });
-    }, { threshold: 0.18 });
+    }, { threshold: 0.16 });
 
     document.querySelectorAll('.feature-card').forEach((card, index) => {
       card.style.transitionDelay = `${index * 90}ms`;
