@@ -1,1048 +1,342 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="LingFlow 灵流是一款开源跨平台翻译工具，支持网页双语阅读、桌面划词翻译、Android 移动端工作台和多引擎 AI 翻译。">
-  <title>灵流 LingFlow - 开源跨平台翻译工具</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f7f4ed;
-      --paper: #fffdfa;
-      --ink: #101113;
-      --muted: #5f6670;
-      --subtle: #8b928d;
-      --line: rgba(16, 17, 19, .1);
-      --line-strong: rgba(16, 17, 19, .18);
-      --blue: #1f7ae0;
-      --teal: #0f9f95;
-      --green: #16b77c;
-      --cream: #efe9dc;
-      --dark: #111315;
-      --dark-2: #1b2028;
-      --shadow: 0 30px 90px rgba(16, 17, 19, .13);
-      --ease: cubic-bezier(.2, .8, .2, 1);
-      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    }
-
-    * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
-    body {
-      margin: 0;
-      color: var(--ink);
-      background:
-        radial-gradient(circle at 74% 28%, rgba(15, 159, 149, .11), transparent 24rem),
-        radial-gradient(circle at 15% 9%, rgba(31, 122, 224, .08), transparent 22rem),
-        linear-gradient(rgba(16, 17, 19, .055) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(16, 17, 19, .055) 1px, transparent 1px),
-        var(--bg);
-      background-size: auto, auto, 56px 56px, 56px 56px, auto;
-      text-rendering: optimizeLegibility;
-      -webkit-font-smoothing: antialiased;
-      overflow-x: hidden;
-    }
-
-    a { color: inherit; text-decoration: none; }
-
-    .shell {
-      width: min(1216px, calc(100% - 48px));
-      margin: 0 auto;
-    }
-
-    .nav {
-      position: sticky;
-      top: 0;
-      z-index: 20;
-      border-bottom: 1px solid var(--line);
-      background: rgba(247, 244, 237, .82);
-      backdrop-filter: blur(18px);
-    }
-
-    .nav-inner {
-      height: 66px;
-      display: grid;
-      grid-template-columns: 1fr auto 1fr;
-      align-items: center;
-      gap: 24px;
-    }
-
-    .brand,
-    .nav-links,
-    .nav-actions,
-    .button,
-    .chip,
-    .device-tab,
-    .provider-row,
-    .tiny-status,
-    .mini-nav {
-      display: flex;
-      align-items: center;
-    }
-
-    .brand {
-      gap: 12px;
-      font-size: 17px;
-      font-weight: 800;
-      letter-spacing: 0;
-    }
-
-    .brand-mark {
-      width: 40px;
-      height: 40px;
-      display: grid;
-      place-items: center;
-      border-radius: 50%;
-      background: var(--dark);
-      box-shadow: 0 14px 28px rgba(16, 17, 19, .16);
-    }
-
-    .brand-mark svg { width: 23px; height: 23px; }
-
-    .nav-links {
-      justify-content: center;
-      gap: 5px;
-      padding: 4px;
-      border: 1px solid rgba(16, 17, 19, .06);
-      border-radius: 999px;
-      background: rgba(255, 253, 250, .72);
-    }
-
-    .nav-links a {
-      padding: 9px 16px;
-      border-radius: 999px;
-      color: #424851;
-      font-size: 14px;
-      transition: background 180ms var(--ease), color 180ms var(--ease), transform 180ms var(--ease);
-    }
-
-    .nav-links a:hover,
-    .nav-links a.active {
-      color: var(--ink);
-      background: #fff;
-      box-shadow: 0 8px 22px rgba(16, 17, 19, .06);
-      transform: translateY(-1px);
-    }
-
-    .nav-actions {
-      justify-content: flex-end;
-      gap: 10px;
-    }
-
-    .button {
-      justify-content: center;
-      gap: 8px;
-      min-height: 46px;
-      padding: 0 18px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: #fff;
-      color: var(--ink);
-      font-size: 14px;
-      font-weight: 800;
-      white-space: nowrap;
-      box-shadow: 0 14px 34px rgba(16, 17, 19, .06);
-      transition: transform 180ms var(--ease), box-shadow 180ms var(--ease), background 180ms var(--ease);
-    }
-
-    .button:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 20px 44px rgba(16, 17, 19, .11);
-    }
-
-    .button.primary {
-      border-color: var(--dark);
-      background: var(--dark);
-      color: #fff;
-    }
-
-    .hero {
-      min-height: calc(100vh - 66px);
-      padding: 108px 0 74px;
-      display: grid;
-      align-items: center;
-    }
-
-    .hero-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(420px, .92fr);
-      align-items: center;
-      gap: clamp(36px, 6vw, 88px);
-    }
-
-    .hero-copy-block { min-width: 0; }
-
-    .chip {
-      width: max-content;
-      max-width: 100%;
-      gap: 10px;
-      padding: 10px 16px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: rgba(255, 253, 250, .72);
-      color: #234640;
-      font-size: 14px;
-      font-weight: 800;
-      animation: fade-up 700ms var(--ease) both;
-    }
-
-    .chip svg { color: var(--teal); }
-
-    h1 {
-      max-width: 700px;
-      margin: 24px 0 0;
-      font-size: clamp(64px, 8.4vw, 116px);
-      line-height: .88;
-      letter-spacing: 0;
-      text-wrap: balance;
-      animation: fade-up 780ms 80ms var(--ease) both;
-    }
-
-    h1 span { display: block; }
-
-    .hero-lead {
-      max-width: 640px;
-      margin: 28px 0 0;
-      color: #2c3541;
-      font-size: clamp(19px, 2vw, 23px);
-      line-height: 1.72;
-      text-wrap: pretty;
-      animation: fade-up 780ms 160ms var(--ease) both;
-    }
-
-    .hero-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      margin-top: 36px;
-      animation: fade-up 780ms 240ms var(--ease) both;
-    }
-
-    .hero-facts {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 18px;
-      max-width: 640px;
-      margin-top: 96px;
-      animation: fade-up 780ms 320ms var(--ease) both;
-    }
-
-    .fact strong {
-      display: block;
-      font-size: 30px;
-      line-height: 1;
-      letter-spacing: 0;
-    }
-
-    .fact span {
-      display: block;
-      margin-top: 7px;
-      color: #323943;
-      font-size: 14px;
-      line-height: 1.35;
-    }
-
-    .hero-visual {
-      position: relative;
-      min-height: 620px;
-      animation: fade-up 850ms 180ms var(--ease) both;
-    }
-
-    .desktop-frame {
-      position: absolute;
-      top: 70px;
-      right: 0;
-      width: min(610px, 100%);
-      border: 10px solid var(--dark);
-      border-radius: 28px;
-      background: #f9fbfd;
-      box-shadow: var(--shadow);
-      overflow: hidden;
-      transform: rotate(-1.5deg);
-    }
-
-    .frame-bar {
-      height: 48px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 0 18px;
-      border-bottom: 1px solid rgba(16, 17, 19, .08);
-      background: #fff;
-      color: #596271;
-      font-size: 13px;
-      font-weight: 700;
-    }
-
-    .dot {
-      width: 11px;
-      height: 11px;
-      border-radius: 50%;
-    }
-
-    .dot.red { background: #ff6b5f; }
-    .dot.yellow { background: #f5bd48; }
-    .dot.green { background: #57c866; }
-
-    .desktop-ui {
-      display: grid;
-      grid-template-columns: 116px 1fr 150px;
-      min-height: 382px;
-      background: #f7f9fb;
-    }
-
-    .device-sidebar {
-      padding: 18px 14px;
-      border-right: 1px solid rgba(16, 17, 19, .07);
-      background: #eef3f4;
-    }
-
-    .side-pill {
-      height: 30px;
-      margin-bottom: 10px;
-      border-radius: 9px;
-      background: rgba(16, 17, 19, .08);
-    }
-
-    .side-pill.active { background: rgba(15, 159, 149, .18); }
-
-    .workbench {
-      padding: 22px;
-    }
-
-    .tiny-status {
-      gap: 8px;
-      height: 38px;
-      padding: 0 12px;
-      border: 1px solid rgba(16, 17, 19, .09);
-      border-radius: 10px;
-      background: #fff;
-      color: #34404d;
-      font-size: 13px;
-      font-weight: 700;
-      white-space: nowrap;
-    }
-
-    .pulse {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--teal);
-      box-shadow: 0 0 0 6px rgba(15, 159, 149, .1);
-    }
-
-    .translate-panels {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14px;
-      margin-top: 18px;
-    }
-
-    .translate-panel {
-      min-height: 205px;
-      padding: 16px;
-      border: 1px solid rgba(16, 17, 19, .08);
-      border-radius: 12px;
-      background: #fff;
-    }
-
-    .panel-label {
-      color: #657184;
-      font-size: 11px;
-      font-weight: 900;
-      text-transform: uppercase;
-    }
-
-    .mock-line {
-      height: 8px;
-      margin-top: 15px;
-      border-radius: 999px;
-      background: #d8e0e7;
-    }
-
-    .mock-line.short { width: 58%; }
-    .mock-line.mid { width: 78%; }
-    .mock-line.accent { background: linear-gradient(90deg, var(--blue), var(--teal)); }
-
-    .provider-list {
-      padding: 22px 14px;
-      border-left: 1px solid rgba(16, 17, 19, .07);
-      background: #f0f4f5;
-    }
-
-    .provider-row {
-      gap: 8px;
-      min-height: 34px;
-      margin-bottom: 10px;
-      padding: 0 10px;
-      border: 1px solid rgba(16, 17, 19, .08);
-      border-radius: 10px;
-      background: #fff;
-      color: #343b44;
-      font-size: 12px;
-      font-weight: 800;
-    }
-
-    .provider-row::before {
-      content: "";
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--green);
-    }
-
-    .extension-card,
-    .mobile-card {
-      position: absolute;
-      border: 1px solid rgba(255, 255, 255, .74);
-      background: rgba(255, 253, 250, .88);
-      backdrop-filter: blur(18px);
-      box-shadow: 0 24px 70px rgba(16, 17, 19, .12);
-    }
-
-    .extension-card {
-      left: -10px;
-      bottom: 112px;
-      width: 280px;
-      padding: 16px;
-      border-radius: 20px;
-      animation: float 5s var(--ease) infinite;
-    }
-
-    .mobile-card {
-      right: 28px;
-      bottom: 0;
-      width: 190px;
-      padding: 12px;
-      border-radius: 30px;
-      border: 8px solid var(--dark);
-      background: #fbfcfd;
-    }
-
-    .mini-nav {
-      justify-content: space-between;
-      color: #66717f;
-      font-size: 10px;
-      font-weight: 800;
-    }
-
-    .bubble {
-      margin-top: 12px;
-      padding: 10px;
-      border-radius: 14px;
-      background: #eef3f7;
-      color: #2a333d;
-      font-size: 11px;
-      line-height: 1.45;
-    }
-
-    .bubble.primary-bubble {
-      margin-left: 26px;
-      background: var(--blue);
-      color: #fff;
-    }
-
-    .section {
-      padding: 92px 0;
-    }
-
-    .section-head {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
-      align-items: end;
-      gap: 40px;
-      margin-bottom: 34px;
-    }
-
-    h2 {
-      max-width: 760px;
-      margin: 0;
-      font-size: clamp(38px, 5vw, 68px);
-      line-height: .98;
-      letter-spacing: 0;
-      text-wrap: balance;
-    }
-
-    .section-note {
-      margin: 0;
-      color: #444c57;
-      font-size: 17px;
-      line-height: 1.8;
-      text-wrap: pretty;
-    }
-
-    .feature-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 18px;
-    }
-
-    .feature-card {
-      min-height: 310px;
-      padding: 28px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(255, 253, 250, .7);
-      box-shadow: 0 20px 55px rgba(16, 17, 19, .05);
-      opacity: 0;
-      transform: translateY(28px);
-      transition: opacity 650ms var(--ease), transform 650ms var(--ease), background 220ms var(--ease), border-color 220ms var(--ease);
-    }
-
-    .feature-card.visible {
-      opacity: 1;
-      transform: translateY(0);
-    }
-
-    .feature-card:hover {
-      background: #fffdfa;
-      border-color: var(--line-strong);
-      transform: translateY(-4px);
-    }
-
-    .feature-index {
-      display: inline-flex;
-      padding: 7px 11px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      color: var(--teal);
-      background: #fff;
-      font-size: 12px;
-      font-weight: 900;
-    }
-
-    .feature-card h3 {
-      margin: 54px 0 13px;
-      font-size: 26px;
-      line-height: 1.16;
-    }
-
-    .feature-card p {
-      margin: 0;
-      color: #4b535f;
-      font-size: 16px;
-      line-height: 1.78;
-    }
-
-    .systems {
-      display: grid;
-      grid-template-columns: 1.04fr .96fr;
-      gap: 18px;
-    }
-
-    .system-panel {
-      min-height: 520px;
-      padding: 32px;
-      border-radius: 8px;
-      border: 1px solid var(--line);
-      background: #fffdfa;
-      box-shadow: 0 20px 60px rgba(16, 17, 19, .06);
-    }
-
-    .system-panel.dark-panel {
-      color: #f4f7f8;
-      background: var(--dark);
-      overflow: hidden;
-      position: relative;
-    }
-
-    .system-panel h3 {
-      margin: 0;
-      font-size: clamp(30px, 4vw, 48px);
-      line-height: 1.05;
-      text-wrap: balance;
-    }
-
-    .system-panel p {
-      margin: 18px 0 0;
-      color: #525b65;
-      font-size: 16px;
-      line-height: 1.78;
-    }
-
-    .dark-panel p { color: #c7d0d7; }
-
-    .route-map {
-      margin-top: 34px;
-      display: grid;
-      gap: 12px;
-    }
-
-    .route-item {
-      padding: 15px 16px;
-      border: 1px solid rgba(255, 255, 255, .1);
-      border-radius: 8px;
-      background: rgba(255, 255, 255, .055);
-      color: #eef5f7;
-      font-weight: 800;
-    }
-
-    .route-item span {
-      display: block;
-      margin-top: 5px;
-      color: #aebcc6;
-      font-size: 13px;
-      font-weight: 600;
-    }
-
-    .provider-cloud {
-      margin-top: 34px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-
-    .provider-pill {
-      padding: 11px 14px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: #fff;
-      color: #262c33;
-      font-size: 14px;
-      font-weight: 850;
-    }
-
-    .privacy-list {
-      margin-top: 32px;
-      display: grid;
-      gap: 14px;
-    }
-
-    .privacy-item {
-      display: grid;
-      grid-template-columns: 42px 1fr;
-      gap: 14px;
-      align-items: start;
-      padding: 16px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(247, 244, 237, .66);
-    }
-
-    .privacy-item b {
-      display: block;
-      margin-bottom: 4px;
-    }
-
-    .privacy-icon {
-      width: 42px;
-      height: 42px;
-      display: grid;
-      place-items: center;
-      border-radius: 50%;
-      background: var(--dark);
-      color: #fff;
-      font-weight: 900;
-    }
-
-    .flow-strip {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(255, 253, 250, .68);
-      overflow: hidden;
-    }
-
-    .flow-step {
-      min-height: 220px;
-      padding: 28px;
-      border-right: 1px solid var(--line);
-    }
-
-    .flow-step:last-child { border-right: 0; }
-
-    .flow-step b {
-      color: var(--teal);
-      font-size: 13px;
-      font-weight: 900;
-    }
-
-    .flow-step h3 {
-      margin: 44px 0 12px;
-      font-size: 24px;
-    }
-
-    .flow-step p {
-      margin: 0;
-      color: #4b535f;
-      line-height: 1.72;
-    }
-
-    .cta {
-      padding-bottom: 104px;
-    }
-
-    .cta-panel {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 28px;
-      padding: 42px;
-      border-radius: 8px;
-      background: var(--dark);
-      color: #fff;
-      box-shadow: var(--shadow);
-    }
-
-    .cta-panel h2 {
-      font-size: clamp(38px, 5vw, 64px);
-    }
-
-    .cta-panel p {
-      max-width: 760px;
-      margin: 18px 0 0;
-      color: #cbd4dc;
-      font-size: 17px;
-      line-height: 1.8;
-    }
-
-    .cta-panel .button {
-      background: #fff;
-      color: var(--ink);
-    }
-
-    footer {
-      padding: 34px 0 44px;
-      border-top: 1px solid var(--line);
-      color: #5e6670;
-    }
-
-    .footer-inner {
-      display: flex;
-      justify-content: space-between;
-      gap: 24px;
-      font-size: 14px;
-    }
-
-    .footer-links {
-      display: flex;
-      gap: 18px;
-    }
-
-    .footer-links a:hover { color: var(--ink); }
-
-    @keyframes fade-up {
-      from { opacity: 0; transform: translateY(24px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    @keyframes float {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-12px); }
-    }
-
-    @media (max-width: 980px) {
-      .shell { width: min(100% - 32px, 760px); }
-      .nav-inner { grid-template-columns: 1fr auto; }
-      .nav-links { display: none; }
-      .hero { padding-top: 62px; }
-      .hero-grid,
-      .section-head,
-      .systems,
-      .cta-panel { grid-template-columns: 1fr; }
-      .hero-visual { min-height: 560px; }
-      .desktop-frame { position: relative; top: 0; width: 100%; transform: none; }
-      .extension-card { left: 12px; bottom: 30px; }
-      .mobile-card { right: 16px; bottom: -28px; }
-      .hero-facts { margin-top: 44px; }
-      .feature-grid { grid-template-columns: 1fr; }
-      .flow-strip { grid-template-columns: 1fr 1fr; }
-      .flow-step:nth-child(2) { border-right: 0; }
-      .flow-step:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
-    }
-
-    @media (max-width: 640px) {
-      .shell { width: calc(100% - 28px); }
-      .nav-actions .button:not(.primary) { display: none; }
-      .button { min-height: 42px; padding: 0 14px; }
-      .brand { font-size: 16px; }
-      .hero { min-height: auto; padding: 44px 0 54px; }
-      .chip { font-size: 12px; }
-      h1 { font-size: clamp(54px, 17vw, 68px); line-height: .92; }
-      .hero-lead { font-size: 17px; }
-      .hero-facts { grid-template-columns: 1fr; gap: 14px; }
-      .hero-visual { min-height: 520px; }
-      .desktop-ui { grid-template-columns: 1fr; }
-      .device-sidebar,
-      .provider-list { display: none; }
-      .translate-panels { grid-template-columns: 1fr; }
-      .translate-panel { min-height: 122px; }
-      .extension-card { width: min(280px, calc(100% - 34px)); }
-      .mobile-card { display: none; }
-      .section { padding: 64px 0; }
-      h2 { font-size: clamp(38px, 12vw, 52px); }
-      .system-panel { min-height: auto; padding: 24px; }
-      .flow-strip { grid-template-columns: 1fr; }
-      .flow-step,
-      .flow-step:nth-child(2) { border-right: 0; border-bottom: 1px solid var(--line); }
-      .flow-step:last-child { border-bottom: 0; }
-      .cta-panel { padding: 28px; }
-      .footer-inner { display: block; }
-      .footer-links { margin-top: 14px; flex-wrap: wrap; }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after {
-        animation-duration: 1ms !important;
-        animation-iteration-count: 1 !important;
-        scroll-behavior: auto !important;
-        transition-duration: 1ms !important;
-      }
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="灵流 LingFlow — 跨平台 AI 翻译工具。浏览器扩展 + Windows 桌面端 + Android 移动端，8 种翻译 Provider，BYO-Key 本地密钥，全局划词，双语网页注入。开源、免费、数据不离设备。">
+<meta name="keywords" content="灵流,LingFlow,AI翻译,浏览器翻译扩展,网页双语,全局划词翻译,开源翻译工具,BYO-Key">
+<meta property="og:title" content="LingFlow">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>灵流 LingFlow — 让翻译如水流般融入阅读</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <nav class="nav">
-    <div class="shell nav-inner">
-      <a class="brand" href="#top" aria-label="LingFlow 首页">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 32 32" fill="none">
-            <path d="M7 8.8A4.8 4.8 0 0 1 11.8 4h10.4A4.8 4.8 0 0 1 27 8.8v8.7a4.8 4.8 0 0 1-4.8 4.8h-4.8L10.8 28v-5.7h-1A4.8 4.8 0 0 1 5 17.5v-5.8" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M11 11h9.5M11 15.5h7M22.5 26c2-1.3 3.4-2.9 4.3-4.8M4.8 7.5C7.1 5.7 9.7 4.8 12.7 4.8" stroke="#8FF3D6" stroke-width="1.8" stroke-linecap="round"/>
-          </svg>
-        </span>
-        <span>灵流 LingFlow</span>
+
+<!-- ===== Nav ===== -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="#" class="nav-brand">
+      <img class="brand-icon" src="favicon.svg" alt="" aria-hidden="true">
+      灵流 LingFlow
+    </a>
+    <div class="nav-links">
+      <a href="#features" class="nav-link">功能</a>
+      <a href="#platforms" class="nav-link">平台</a>
+      <a href="#providers" class="nav-link">翻译引擎</a>
+      <a href="#privacy" class="nav-link">隐私安全</a>
+      <a href="#start" class="nav-link">快速开始</a>
+    </div>
+    <a href="https://github.com/glosc-ai/LingFlow" class="nav-cta" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+      GitHub
+    </a>
+  </div>
+</nav>
+
+<!-- ===== Hero ===== -->
+<section class="hero">
+  <div class="hero-inner">
+    <img class="hero-icon" src="favicon.svg" alt="LingFlow">
+    <h1>让翻译如<span>水流</span>般融入阅读</h1>
+    <p>灵流是一款开源的跨平台 AI 翻译工具。浏览器扩展 + 桌面客户端 + 移动端，一套核心能力覆盖所有翻译场景，数据完全由你掌控。</p>
+    <div class="hero-actions">
+      <a href="https://github.com/glosc-ai/LingFlow/releases" class="btn btn-primary" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        下载桌面端
       </a>
+      <a href="https://github.com/glosc-ai/LingFlow" class="btn btn-outline" target="_blank" rel="noopener">查看源码</a>
+    </div>
+  </div>
+</section>
 
-      <div class="nav-links" aria-label="主导航">
-        <a class="active" href="#top">首页</a>
-        <a href="#features">功能</a>
-        <a href="#architecture">架构</a>
-        <a href="#workflow">场景</a>
+<!-- ===== Features ===== -->
+<section class="section" id="features">
+  <div class="section-inner">
+    <div class="section-label">核心能力</div>
+    <div class="section-title">翻译不应打断思考的流动</div>
+    <div class="section-desc">灵流围绕"无感翻译"设计每一个交互——从网页双语注入到全局划词悬浮窗，翻译自然地融入工作流，而非跳出来抢占注意力。</div>
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+          </svg>
+        </div>
+        <h3>网页双语注入</h3>
+        <p>译文以略小一号、略淡一级的颜色自然嵌入原文下方，保持页面原貌。鼠标悬停高亮当前段落，一键清除所有注入内容。支持视口懒加载翻译，不浪费 API 额度。</p>
       </div>
-
-      <div class="nav-actions">
-        <a class="button" href="https://github.com/glosc-ai/LingFlow" target="_blank" rel="noreferrer">GitHub Star</a>
-        <a class="button primary" href="https://github.com/glosc-ai/LingFlow/releases" target="_blank" rel="noreferrer">下载</a>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </div>
+        <h3>全局划词翻译</h3>
+        <p>Windows 桌面端支持任意应用内选中文本即弹出翻译。使用 UI Automation 读取选区，不模拟 Ctrl+C、不污染剪贴板。浏览器中由扩展辅助上报选区，体验一致。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </div>
+        <h3>AI 多服务源与自动回退</h3>
+        <p>配置多个 OpenAI-compatible 服务源，每个服务源可填多个模型。开启自动回退后，翻译失败会依次尝试当前源的下一个模型，再尝试下一个服务源——确保翻译永不中断。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+        </div>
+        <h3>密钥完全本地化</h3>
+        <p>采用 BYO-Key 模式——所有 API Key 保存在你的设备上。桌面端使用系统凭据库（Windows Credential Manager），扩展端通过桌面端本地代理转发请求，密钥从不离开本机。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+            <path d="M2 7h20" opacity="0.4"/>
+          </svg>
+        </div>
+        <h3>桌面端 + 扩展联动</h3>
+        <p>浏览器扩展通过本地代理 (127.0.0.1:47631) 读取桌面端配置并转发翻译请求。在桌面端配置一次服务源，扩展自动同步——无需重复填写密钥。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
+          </svg>
+        </div>
+        <h3>在线更新</h3>
+        <p>桌面端自动检查 GitHub Releases 最新版本，发现新版本后引导下载。后续将支持静默下载和重启安装，让更新无感。</p>
       </div>
     </div>
-  </nav>
+  </div>
+</section>
 
-  <main id="top">
-    <section class="hero">
-      <div class="shell hero-grid">
-        <div class="hero-copy-block">
-          <div class="chip">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 4h10v16H7z"/><path d="M11 18h2"/></svg>
-            桌面端 · 浏览器扩展 · Android 移动端
+<!-- ===== Platforms ===== -->
+<section class="section section-surface" id="platforms">
+  <div class="section-inner">
+    <div class="section-label">全平台覆盖</div>
+    <div class="section-title">一套核心代码，多端运行</div>
+    <div class="section-desc">基于 pnpm workspace + Turborepo 的 Monorepo 架构，共享 @lingflow/core 翻译核心和 @lingflow/dom 注入引擎。React + Tailwind CSS 驱动所有终端 UI。</div>
+    <div class="platform-grid">
+      <div class="platform-card">
+        <div class="platform-top">
+          <div class="platform-icon desktop">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           </div>
-          <h1><span>LingFlow</span><span>灵流</span></h1>
-          <p class="hero-lead">开源跨平台翻译软件，为网页、桌面和移动端提供一致的翻译体验。支持网页双语阅读、Windows 划词浮窗、Android 翻译工作台，以及多服务源 AI 翻译。</p>
-          <div class="hero-actions">
-            <a class="button primary" href="https://github.com/glosc-ai/LingFlow/releases" target="_blank" rel="noreferrer">下载 LingFlow</a>
-            <a class="button" href="https://github.com/glosc-ai/LingFlow" target="_blank" rel="noreferrer">查看源码</a>
-            <a class="button" href="https://one.gloscai.com/keys" target="_blank" rel="noreferrer">获取 Key</a>
-          </div>
-          <div class="hero-facts" aria-label="产品能力">
-            <div class="fact"><strong>7</strong><span>翻译服务与 AI Provider</span></div>
-            <div class="fact"><strong>本地</strong><span>配置、历史与密钥优先留在设备上</span></div>
-            <div class="fact"><strong>多端</strong><span>Windows、Chrome / Edge、Android</span></div>
-          </div>
+          <h3>桌面客户端</h3>
+          <div class="platform-tag">Tauri v2 · Windows · Rust</div>
         </div>
-
-        <div class="hero-visual" aria-label="LingFlow 多端产品界面示意">
-          <div class="desktop-frame">
-            <div class="frame-bar">
-              <span class="dot red"></span>
-              <span class="dot yellow"></span>
-              <span class="dot green"></span>
-              <span style="margin-left:8px">LingFlow 工作台</span>
-            </div>
-            <div class="desktop-ui">
-              <aside class="device-sidebar">
-                <div class="side-pill active"></div>
-                <div class="side-pill"></div>
-                <div class="side-pill"></div>
-                <div class="side-pill"></div>
-              </aside>
-              <section class="workbench">
-                <div class="tiny-status"><span class="pulse"></span>本地代理在线 · 服务源自动回退</div>
-                <div class="translate-panels">
-                  <div class="translate-panel">
-                    <div class="panel-label">Source</div>
-                    <div class="mock-line mid"></div>
-                    <div class="mock-line"></div>
-                    <div class="mock-line mid"></div>
-                    <div class="mock-line short"></div>
-                  </div>
-                  <div class="translate-panel">
-                    <div class="panel-label">Translation</div>
-                    <div class="mock-line accent"></div>
-                    <div class="mock-line accent mid"></div>
-                    <div class="mock-line accent"></div>
-                    <div class="mock-line accent short"></div>
-                  </div>
-                </div>
-              </section>
-              <aside class="provider-list">
-                <div class="provider-row">AI 翻译</div>
-                <div class="provider-row">DeepL</div>
-                <div class="provider-row">Microsoft</div>
-                <div class="provider-row">百度翻译</div>
-              </aside>
-            </div>
-          </div>
-
-          <div class="extension-card">
-            <div style="font-weight:900">网页双语注入</div>
-            <div class="mock-line" style="width:92%"></div>
-            <div class="mock-line accent" style="width:78%; opacity:.45"></div>
-            <div class="mock-line" style="width:96%"></div>
-            <div class="mock-line accent" style="width:70%; opacity:.45"></div>
-          </div>
-
-          <div class="mobile-card">
-            <div class="mini-nav"><span>翻译</span><span>•••</span></div>
-            <div class="bubble primary-bubble">帮我翻译这段网页选区</div>
-            <div class="bubble">已使用桌面端配置完成翻译，并记录到本地历史。</div>
-          </div>
-        </div>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>全局划词悬浮翻译窗</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>翻译控制台 + 服务源管理</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>本地 HTTP 代理 (47631)</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>SQLite 持久化 + 凭据库密钥</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>在线更新 (GitHub Releases)</li>
+        </ul>
       </div>
-    </section>
-
-    <section class="section" id="features">
-      <div class="shell">
-        <div class="section-head">
-          <h2>把翻译放进真正的阅读现场</h2>
-          <p class="section-note">LingFlow 不要求你离开当前页面、应用或设备。它把翻译入口放到阅读发生的地方，再把服务配置统一收拢起来。</p>
+      <div class="platform-card">
+        <div class="platform-top">
+          <div class="platform-icon extension">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          </div>
+          <h3>浏览器扩展</h3>
+          <div class="platform-tag">Chrome · Edge · Manifest V3</div>
         </div>
-
-        <div class="feature-grid">
-          <article class="feature-card">
-            <span class="feature-index">网页阅读</span>
-            <h3>双语内容直接进入页面</h3>
-            <p>浏览器扩展会抽取可读正文段落，将译文注入到原页面中，并支持清理和去重，适合阅读长文、技术文档和外文资料。</p>
-          </article>
-          <article class="feature-card">
-            <span class="feature-index">桌面划词</span>
-            <h3>选中文本即可唤起浮窗</h3>
-            <p>Windows 客户端支持全局划词悬浮窗，默认通过 UI Automation 读取选区，不主动模拟复制，尽量减少对剪贴板的打扰。</p>
-          </article>
-          <article class="feature-card">
-            <span class="feature-index">移动端</span>
-            <h3>Android 工作台复用同一核心</h3>
-            <p>Tauri Android 工程已接入同一套 React 控制台和翻译核心，适合移动端输入、复制译文、查看历史和管理服务源。</p>
-          </article>
-        </div>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>整页 / 视口懒加载双语翻译</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>划词选中即译</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>连接桌面端本地代理</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>一键清除注入内容</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>选区上报桌面端悬浮窗</li>
+        </ul>
       </div>
-    </section>
-
-    <section class="section" id="architecture">
-      <div class="shell">
-        <div class="section-head">
-          <h2>多引擎翻译 本地优先管理</h2>
-          <p class="section-note">你可以接入常用云翻译，也可以接入兼容 OpenAI 的 AI 服务。密钥、配置和历史由本地客户端管理，浏览器扩展默认复用桌面端能力。</p>
-        </div>
-
-        <div class="systems">
-          <article class="system-panel dark-panel">
-            <h3>从扩展到桌面端的本地通道</h3>
-            <p>浏览器扩展默认连接桌面端代理，读取当前服务源配置，并由桌面端转发翻译请求。网页选区也可以上报到桌面端，触发同一个划词浮窗。</p>
-            <div class="route-map">
-              <div class="route-item">Chrome / Edge 扩展<span>页面双语翻译、选区上报、清理注入内容</span></div>
-              <div class="route-item">127.0.0.1:47631 本地代理<span>设置同步、请求转发、用量回传</span></div>
-              <div class="route-item">Tauri 桌面客户端<span>系统凭据库、SQLite、全局划词与在线更新</span></div>
-            </div>
-          </article>
-
-          <article class="system-panel">
-            <h3>选择你信任的翻译服务</h3>
-            <p>LingFlow 支持多个 Provider，并允许 AI 服务源拖拽排序、多个模型依次尝试，以及服务源自动回退。</p>
-            <div class="provider-cloud" aria-label="支持的翻译服务">
-              <span class="provider-pill">AI 翻译</span>
-              <span class="provider-pill">Google Cloud</span>
-              <span class="provider-pill">百度翻译</span>
-              <span class="provider-pill">DeepL</span>
-              <span class="provider-pill">Microsoft</span>
-              <span class="provider-pill">有道智云</span>
-              <span class="provider-pill">腾讯云 TMT</span>
-            </div>
-            <div class="privacy-list">
-              <div class="privacy-item">
-                <span class="privacy-icon">1</span>
-                <div><b>密钥留在本机</b><span>桌面端密钥保存到系统凭据库，Android 端随本机 app data 持久化。</span></div>
-              </div>
-              <div class="privacy-item">
-                <span class="privacy-icon">2</span>
-                <div><b>历史本地保存</b><span>普通配置、月度统计和翻译历史保存到本地 SQLite。</span></div>
-              </div>
-            </div>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section class="section" id="workflow">
-      <div class="shell">
-        <div class="section-head">
-          <h2>一套工作流 覆盖四类高频动作</h2>
-          <p class="section-note">从查资料到写文档，从桌面应用到移动端，LingFlow 用同一套核心能力承接不同翻译入口。</p>
-        </div>
-
-        <div class="flow-strip">
-          <div class="flow-step">
-            <b>01</b>
-            <h3>整页阅读</h3>
-            <p>翻译当前网页正文，保留原文结构，减少复制粘贴。</p>
+      <div class="platform-card">
+        <div class="platform-top">
+          <div class="platform-icon mobile">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
           </div>
-          <div class="flow-step">
-            <b>02</b>
-            <h3>划词查询</h3>
-            <p>选中任意文本，以浮窗方式快速查看译文。</p>
-          </div>
-          <div class="flow-step">
-            <b>03</b>
-            <h3>工作台翻译</h3>
-            <p>输入、复制、查看历史，并切换目标语言和 Provider。</p>
-          </div>
-          <div class="flow-step">
-            <b>04</b>
-            <h3>服务管理</h3>
-            <p>管理 API Key、AI 模型、回退策略和服务可用性。</p>
-          </div>
+          <h3>移动端</h3>
+          <div class="platform-tag">Android · arm64 APK · Tauri</div>
         </div>
-      </div>
-    </section>
-
-    <section class="cta">
-      <div class="shell">
-        <div class="cta-panel">
-          <div>
-            <h2>让翻译工具跟上你的阅读节奏</h2>
-            <p>下载 LingFlow 桌面端和浏览器扩展，配置你自己的翻译服务。项目开源，欢迎试用、反馈，也欢迎一起完善 PDF 阅读器、移动端体验和发布链路。</p>
-          </div>
-          <a class="button" href="https://github.com/glosc-ai/LingFlow/releases" target="_blank" rel="noreferrer">前往下载</a>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <footer>
-    <div class="shell footer-inner">
-      <div>© 2026 LingFlow. Open source translation across devices.</div>
-      <div class="footer-links">
-        <a href="https://github.com/glosc-ai/LingFlow" target="_blank" rel="noreferrer">GitHub</a>
-        <a href="https://github.com/glosc-ai/LingFlow/releases" target="_blank" rel="noreferrer">Releases</a>
-        <a href="https://github.com/glosc-ai/LingFlow/blob/main/README.md" target="_blank" rel="noreferrer">README</a>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>翻译工作台（文本输入 / 输出）</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>多服务源配置管理</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>翻译历史记录</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>首次使用引导</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>复用桌面端核心逻辑</li>
+        </ul>
       </div>
     </div>
-  </footer>
+  </div>
+</section>
 
-  <script>
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('visible');
-          observer.unobserve(entry.target);
-        }
-      });
-    }, { threshold: 0.16 });
+<!-- ===== Providers ===== -->
+<section class="section" id="providers">
+  <div class="section-inner">
+    <div class="section-label">翻译引擎</div>
+    <div class="section-title">7 种 Provider，自由组合</div>
+    <div class="section-desc">从免费官方接口到 AI 大模型，灵活配置。所有 Provider 共享统一的翻译调度器和缓存层，切换引擎无需改动代码。</div>
+    <div class="provider-grid">
+      <div class="provider-chip">
+        <span class="provider-chip-dot free"></span>Google Cloud
+        <span class="provider-chip-tag free-tag">免费接口</span>
+      </div>
+      <div class="provider-chip">
+        <span class="provider-chip-dot free"></span>百度翻译
+        <span class="provider-chip-tag free-tag">免费接口</span>
+      </div>
+      <div class="provider-chip">
+        <span class="provider-chip-dot free"></span>DeepL
+        <span class="provider-chip-tag free-tag">免费接口</span>
+      </div>
+      <div class="provider-chip">
+        <span class="provider-chip-dot free"></span>Microsoft Translator
+        <span class="provider-chip-tag free-tag">免费接口</span>
+      </div>
+      <div class="provider-chip">
+        <span class="provider-chip-dot free"></span>有道智云
+        <span class="provider-chip-tag free-tag">免费接口</span>
+      </div>
+      <div class="provider-chip">
+        <span class="provider-chip-dot free"></span>腾讯云 TMT
+        <span class="provider-chip-tag free-tag">免费接口</span>
+      </div>
+      <div class="provider-chip">
+        <span class="provider-chip-dot ai"></span>AI 翻译
+        <span class="provider-chip-tag ai-tag">OpenAI-compatible</span>
+      </div>
+    </div>
+    <p class="provider-note">
+      AI 翻译兼容 OpenAI、DeepSeek 及一切 OpenAI Chat Completions 风格接口 · 支持多服务源拖拽排序与模型级自动回退
+    </p>
+  </div>
+</section>
 
-    document.querySelectorAll('.feature-card').forEach((card, index) => {
-      card.style.transitionDelay = `${index * 90}ms`;
-      observer.observe(card);
-    });
-  </script>
+<!-- ===== Architecture ===== -->
+<section class="section section-surface">
+  <div class="section-inner section-centered">
+    <div class="section-label">架构概览</div>
+    <div class="section-title">客户端架构：本地优先，数据不离设备</div>
+    <div class="section-desc">
+      灵流不依赖任何中心服务器。桌面端作为本地翻译中枢，扩展和移动端通过统一核心包共享翻译能力。
+    </div>
+    <div class="arch-diagram">
+      <div class="arch-node">
+        <div class="arch-node-box extension-box">浏览器扩展</div>
+        <div class="arch-node-label">Chrome / Edge</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node">
+        <div class="arch-node-box desktop-box">桌面端中枢</div>
+        <div class="arch-node-label">Tauri v2 / Rust</div>
+      </div>
+      <div class="arch-arrow">←</div>
+      <div class="arch-node">
+        <div class="arch-node-box browser-box">翻译服务商</div>
+        <div class="arch-node-label">Google · DeepL · AI</div>
+      </div>
+    </div>
+    <p class="arch-note">
+      扩展通过 <code class="inline-code">127.0.0.1:47631</code> 读取配置和转发请求 · 桌面端统一管理密钥和调度
+    </p>
+  </div>
+</section>
+
+<!-- ===== Privacy ===== -->
+<section class="section" id="privacy">
+  <div class="section-inner">
+    <div class="section-label">隐私与安全</div>
+    <div class="section-title">你的密钥，只在你手中</div>
+    <div class="section-desc">灵流的架构设计从第一天就遵循一个原则：用户的 API Key 绝不离开本地设备。</div>
+    <div class="privacy-banner">
+      <div class="privacy-banner-inner">
+        <div>
+          <h3>端到端本地存储</h3>
+          <p>桌面端密钥保存在 Windows Credential Manager 系统凭据库中，非机密数据存入本地 SQLite。扩展通过本机 localhost 代理读取桌面端配置，所有翻译请求由桌面端 Rust HTTP 层代理转发。没有中心服务器、没有云端存储、没有遥测上报。</p>
+        </div>
+        <div class="privacy-items">
+          <div class="privacy-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>API Key 存于系统凭据库</div>
+          <div class="privacy-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>扩展不在本地存储任何密钥</div>
+          <div class="privacy-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>localStorage / SQLite 本机持久化</div>
+          <div class="privacy-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>无需账号、无需登录</div>
+          <div class="privacy-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>MIT 开源，代码可审计</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Getting Started ===== -->
+<section class="section section-surface" id="start">
+  <div class="section-inner">
+    <div class="section-label">快速开始</div>
+    <div class="section-title">三分钟上手灵流</div>
+    <div class="steps">
+      <div class="step-card">
+        <div class="step-num">01</div>
+        <h4>安装桌面端</h4>
+        <p>从 <a href="https://github.com/glosc-ai/LingFlow/releases" class="text-link">GitHub Releases</a> 下载最新 Windows 安装包。需要 WebView2 Runtime（Windows 11 已内置）。</p>
+      </div>
+      <div class="step-card">
+        <div class="step-num">02</div>
+        <h4>配置翻译服务源</h4>
+        <p>在桌面端配置至少一个 Provider 的 API Key。AI 翻译用户可添加多个 OpenAI-compatible 服务源并启用自动回退。</p>
+      </div>
+      <div class="step-card">
+        <div class="step-num">03</div>
+        <h4>安装浏览器扩展</h4>
+        <p>构建扩展后从 <code>apps/extension/dist</code> 加载到 Chrome/Edge。扩展自动连接桌面端代理，无需重复配置密钥。</p>
+      </div>
+      <div class="step-card">
+        <div class="step-num">04</div>
+        <h4>开始双语阅读</h4>
+        <p>打开任意网页，点击扩展图标开启整页翻译，或选中文本查看翻译。桌面端开启全局划词后，任意应用内选中文本即可翻译。</p>
+      </div>
+    </div>
+    <div class="start-cta">
+      <a href="https://github.com/glosc-ai/LingFlow#%E5%AE%89%E8%A3%85%E4%BE%9D%E8%B5%96" class="btn btn-primary" target="_blank" rel="noopener">查看完整文档 →</a>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Footer ===== -->
+<footer class="footer">
+  <div class="footer-inner">
+    <div>
+      <div class="footer-brand">
+        <img class="footer-icon" src="favicon.svg" alt="" aria-hidden="true">
+        灵流 LingFlow
+      </div>
+      <p class="footer-desc">开源跨平台 AI 翻译工具<br>让翻译如水流般融入阅读场景</p>
+    </div>
+    <div class="footer-col">
+      <h4>产品</h4>
+      <a href="#features">功能</a>
+      <a href="#platforms">平台</a>
+      <a href="#providers">翻译引擎</a>
+      <a href="#privacy">隐私安全</a>
+    </div>
+    <div class="footer-col">
+      <h4>开发</h4>
+      <a href="https://github.com/glosc-ai/LingFlow" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/glosc-ai/LingFlow/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="https://github.com/glosc-ai/LingFlow#%E7%8E%AF%E5%A2%83%E8%A6%81%E6%B1%82" target="_blank" rel="noopener">开发文档</a>
+    </div>
+    <div class="footer-col">
+      <h4>社区</h4>
+      <a href="https://github.com/glosc-ai/LingFlow/issues" target="_blank" rel="noopener">Issue 反馈</a>
+      <a href="https://github.com/glosc-ai/LingFlow/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>@ 2026 Glosc AI One. 版权所有 沪ICP备2026003781号-1 沪公网安备31011202022083号</span>
+    <span>设计原型文件：<a href="prototypes.html" class="muted-link">prototypes.html</a></span>
+  </div>
+</footer>
+
 </body>
 </html>
