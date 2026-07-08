@@ -41,7 +41,6 @@ interface AppSettings {
   readonly localProxyPort: number;
   readonly globalSelectionEnabled: boolean;
   readonly globalSelectionExcludedApps: readonly string[];
-  readonly globalSelectionClipboardFallbackEnabled: boolean;
   readonly aiFallbackEnabled: boolean;
   readonly aiSources: readonly AiServiceSourceConfig[];
   readonly aiBaseUrl?: string;
@@ -176,7 +175,6 @@ const DEFAULT_SETTINGS: AppSettings = {
   localProxyPort: 47631,
   globalSelectionEnabled: false,
   globalSelectionExcludedApps: DEFAULT_GLOBAL_SELECTION_EXCLUDED_APPS,
-  globalSelectionClipboardFallbackEnabled: false,
   aiFallbackEnabled: true,
   aiSources: [
     {
@@ -1175,8 +1173,6 @@ async function detectGlobalSelection(settings: AppSettings, position: { readonly
     const selectedText = await invoke<string>('capture_foreground_selection', {
       excludedApps: settings.globalSelectionExcludedApps,
       cursorPosition: roundedPosition,
-      clipboardFallbackEnabled: settings.globalSelectionClipboardFallbackEnabled,
-      clipboardFallbackApps: [],
     });
     const normalized = selectedText.trim();
     if (!normalized) {
@@ -1791,15 +1787,7 @@ function AppSettingsView({
         <Card className="settings-wide" title="全局划词">
           <div className="grid gap-4 p-5">
             <Toggle checked={settings.globalSelectionEnabled} label="启用全局划词" onChange={(checked) => onSettingsChange({ ...settings, globalSelectionEnabled: checked })} />
-            <Toggle
-              checked={settings.globalSelectionClipboardFallbackEnabled}
-              label="启用兼容剪贴板兜底"
-              onChange={(checked) => onSettingsChange({ ...settings, globalSelectionClipboardFallbackEnabled: checked })}
-            />
-            <p className="text-xs leading-5 text-[var(--muted)]">
-              仅当 UI Automation 无法读取且前台进程未命中下方黑名单时，才会临时发送 Ctrl+C 读取文本。
-            </p>
-            <Field hint="一行一个进程名，例如 explorer.exe、Code.exe、chrome.exe。命中后不会读取该软件中的选中文本，也不会触发兼容兜底。" label="进程黑名单">
+            <Field hint="一行一个进程名，例如 explorer.exe、Code.exe、chrome.exe。命中后不会读取该软件中的选中文本。" label="进程黑名单">
               <textarea
                 className="settings-textarea"
                 onChange={(event) =>
@@ -2462,8 +2450,6 @@ function mergeStoredSettings(storedSettings: Partial<AppSettings>, storedSecrets
     ...storedSettings,
     onboardingCompleted: storedSettings.onboardingCompleted ?? DEFAULT_SETTINGS.onboardingCompleted,
     globalSelectionExcludedApps,
-    globalSelectionClipboardFallbackEnabled:
-      storedSettings.globalSelectionClipboardFallbackEnabled ?? DEFAULT_SETTINGS.globalSelectionClipboardFallbackEnabled,
     aiFallbackEnabled: storedSettings.aiFallbackEnabled ?? DEFAULT_SETTINGS.aiFallbackEnabled,
     aiSources,
     ...storedSecrets,
@@ -2478,7 +2464,6 @@ function normalizeSettingsForRuntime(settings: AppSettings): AppSettings {
   return {
     ...settings,
     globalSelectionEnabled: false,
-    globalSelectionClipboardFallbackEnabled: false,
   };
 }
 
@@ -2508,7 +2493,6 @@ function omitSecrets(settings: AppSettings) {
     localProxyPort: settings.localProxyPort,
     globalSelectionEnabled: settings.globalSelectionEnabled,
     globalSelectionExcludedApps: settings.globalSelectionExcludedApps,
-    globalSelectionClipboardFallbackEnabled: settings.globalSelectionClipboardFallbackEnabled,
     aiFallbackEnabled: settings.aiFallbackEnabled,
     aiSources: settings.aiSources.map((source) => ({ ...source, apiKey: '' })),
     baiduAppId: settings.baiduAppId,

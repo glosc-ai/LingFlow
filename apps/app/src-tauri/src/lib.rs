@@ -21,27 +21,24 @@ use std::{
 use windows::{
     core::{BOOL, Interface},
     Win32::{
-        Foundation::{CloseHandle, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{CloseHandle, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         System::{
             Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED},
-            DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, SetClipboardData},
+            DataExchange::{CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard},
             Diagnostics::ToolHelp::{
                 CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
                 TH32CS_SNAPPROCESS,
             },
-            Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE},
+            Memory::{GlobalLock, GlobalSize, GlobalUnlock},
             Threading::{GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION},
         },
         UI::{
             Accessibility::{CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId},
-            Input::KeyboardAndMouse::{
-                SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL, VK_C,
-            },
             WindowsAndMessaging::{
                 CallNextHookEx, GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetWindowThreadProcessId,
                 GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, SetWindowsHookExW, UnhookWindowsHookEx,
-                EnumWindows, GetWindowRect, WindowFromPoint, GUITHREADINFO, MSLLHOOKSTRUCT, MSG, GWL_EXSTYLE, WH_MOUSE_LL, WM_GETTEXT, WM_GETTEXTLENGTH,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+                EnumWindows, GetWindowRect, WindowFromPoint, GUITHREADINFO, HTCAPTION, MSLLHOOKSTRUCT, MSG, GWL_EXSTYLE, WH_MOUSE_LL,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NCHITTEST, WM_RBUTTONDOWN, WM_RBUTTONUP, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
             },
         },
     },
@@ -67,8 +64,6 @@ const SECRET_DATA_PREFIX: &str = "secret:";
 #[cfg(target_os = "windows")]
 const CF_UNICODETEXT_FORMAT: u32 = 13;
 #[cfg(target_os = "windows")]
-const EM_GETSEL_MESSAGE: u32 = 0x00B0;
-#[cfg(target_os = "windows")]
 const GLOBAL_MOUSE_UP_EVENT: &str = "lingflow://global-mouse-up";
 
 #[cfg(target_os = "windows")]
@@ -81,6 +76,7 @@ struct MouseDragState {
     point: POINT,
     started_at: Instant,
     button: u32,
+    started_on_caption: bool,
 }
 
 #[derive(Clone)]
@@ -385,8 +381,8 @@ async fn capture_foreground_selection(
     state: tauri::State<'_, SelectionCaptureState>,
     excluded_apps: Vec<String>,
     cursor_position: Option<ScreenPoint>,
-    clipboard_fallback_enabled: Option<bool>,
-    clipboard_fallback_apps: Option<Vec<String>>,
+    _clipboard_fallback_enabled: Option<bool>,
+    _clipboard_fallback_apps: Option<Vec<String>>,
 ) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
@@ -398,8 +394,6 @@ async fn capture_foreground_selection(
                 diagnostics,
                 excluded_apps,
                 cursor_position,
-                clipboard_fallback_enabled.unwrap_or(false),
-                clipboard_fallback_apps.unwrap_or_default(),
             )
         })
             .await
@@ -407,7 +401,7 @@ async fn capture_foreground_selection(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (state, excluded_apps, cursor_position, clipboard_fallback_enabled, clipboard_fallback_apps);
+        let _ = (state, excluded_apps, cursor_position, _clipboard_fallback_enabled, _clipboard_fallback_apps);
         Err("Global selection translation is not available on Android or other non-Windows clients".to_string())
     }
 }
@@ -507,8 +501,6 @@ fn capture_foreground_selection_with_state(
     diagnostics: Arc<Mutex<SelectionDiagnostics>>,
     excluded_apps: Vec<String>,
     cursor_position: Option<ScreenPoint>,
-    clipboard_fallback_enabled: bool,
-    clipboard_fallback_apps: Vec<String>,
 ) -> Result<String, String> {
     write_selection_diagnostics(&diagnostics, SelectionDiagnostics {
         stage: "started".to_string(),
@@ -548,8 +540,6 @@ fn capture_foreground_selection_with_state(
         &diagnostics,
         &excluded_apps,
         cursor_position,
-        clipboard_fallback_enabled,
-        &clipboard_fallback_apps,
     );
     if let Err(error) = &result {
         update_selection_diagnostics(&diagnostics, |current| {
@@ -565,8 +555,6 @@ fn capture_foreground_selection_inner(
     diagnostics: &Arc<Mutex<SelectionDiagnostics>>,
     excluded_apps: &[String],
     cursor_position: Option<ScreenPoint>,
-    clipboard_fallback_enabled: bool,
-    clipboard_fallback_apps: &[String],
 ) -> Result<String, String> {
     let process_name = foreground_process_name_inner()?;
     update_selection_diagnostics(diagnostics, |current| {
@@ -597,42 +585,12 @@ fn capture_foreground_selection_inner(
         Err(error) => push_selection_attempt(diagnostics, "uia", false, error),
     }
 
-    match selected_text_from_standard_edit() {
-        Ok(text) => {
-            push_selection_attempt(diagnostics, "standard-edit", true, format!("{} chars", text.len()));
-            update_selection_diagnostics(diagnostics, |current| {
-                current.stage = "success".to_string();
-                current.result_length = Some(text.len());
-            });
-            return Ok(text);
-        }
-        Err(error) => push_selection_attempt(diagnostics, "standard-edit", false, error),
-    }
-
-    let can_use_clipboard_fallback =
-        clipboard_fallback_enabled && (clipboard_fallback_apps.is_empty() || is_excluded_process(&process_name, clipboard_fallback_apps));
-    if can_use_clipboard_fallback {
-        match selected_text_from_clipboard_fallback() {
-            Ok(text) => {
-                push_selection_attempt(diagnostics, "clipboard-fallback", true, format!("{} chars", text.len()));
-                update_selection_diagnostics(diagnostics, |current| {
-                    current.stage = "success".to_string();
-                    current.result_length = Some(text.len());
-                });
-                return Ok(text);
-            }
-            Err(error) => push_selection_attempt(diagnostics, "clipboard-fallback", false, error),
-        }
-    } else if clipboard_fallback_enabled {
-        push_selection_attempt(
-            diagnostics,
-            "clipboard-fallback",
-            false,
-            format!("{process_name} is not in clipboard fallback allow list"),
-        );
-    }
-
-    Err("No selected text was found through Windows UI Automation".to_string())
+    update_selection_diagnostics(diagnostics, |current| {
+        current.stage = "empty".to_string();
+        current.result_length = Some(0);
+        current.error = None;
+    });
+    Ok(String::new())
 }
 
 #[cfg(target_os = "windows")]
@@ -808,6 +766,7 @@ fn remember_global_mouse_down(message: u32, lparam: LPARAM) {
             point,
             started_at: Instant::now(),
             button: message,
+            started_on_caption: message == WM_LBUTTONDOWN && mouse_point_hits_caption(point),
         });
     }
 }
@@ -829,6 +788,9 @@ fn global_mouse_up_selection_point(message: u32, lparam: LPARAM) -> Option<POINT
     };
 
     if !mouse_buttons_match(down.button, message) {
+        return None;
+    }
+    if down.started_on_caption {
         return None;
     }
 
@@ -858,6 +820,31 @@ fn mouse_event_point(lparam: LPARAM) -> Option<POINT> {
         x: hook.pt.x,
         y: hook.pt.y,
     })
+}
+
+#[cfg(target_os = "windows")]
+fn mouse_point_hits_caption(point: POINT) -> bool {
+    let hwnd = unsafe { WindowFromPoint(point) };
+    if hwnd.0.is_null() {
+        return false;
+    }
+
+    let hit = unsafe {
+        SendMessageW(
+            hwnd,
+            WM_NCHITTEST,
+            Some(WPARAM(0)),
+            Some(point_to_lparam(point)),
+        )
+    };
+    hit.0 == HTCAPTION as isize
+}
+
+#[cfg(target_os = "windows")]
+fn point_to_lparam(point: POINT) -> LPARAM {
+    let x = point.x as i16 as u16 as u32;
+    let y = point.y as i16 as u16 as u32;
+    LPARAM(((y << 16) | x) as isize)
 }
 
 #[cfg(target_os = "windows")]
@@ -1001,98 +988,6 @@ fn selected_text_from_uia_element(element: &windows::Win32::UI::Accessibility::I
 }
 
 #[cfg(target_os = "windows")]
-fn selected_text_from_standard_edit() -> Result<String, String> {
-    let hwnd = focused_control_window()?;
-    let mut selection_start = 0u32;
-    let mut selection_end = 0u32;
-    unsafe {
-        SendMessageW(
-            hwnd,
-            EM_GETSEL_MESSAGE,
-            Some(WPARAM((&mut selection_start as *mut u32) as usize)),
-            Some(LPARAM((&mut selection_end as *mut u32) as isize)),
-        );
-    }
-
-    if selection_end <= selection_start {
-        return Err("Standard edit control has no selection".to_string());
-    }
-
-    let text_length = unsafe { SendMessageW(hwnd, WM_GETTEXTLENGTH, Some(WPARAM(0)), Some(LPARAM(0))).0 as usize };
-    if text_length == 0 {
-        return Err("Standard edit control has no text".to_string());
-    }
-
-    let mut buffer = vec![0u16; text_length + 1];
-    unsafe {
-        SendMessageW(
-            hwnd,
-            WM_GETTEXT,
-            Some(WPARAM(buffer.len())),
-            Some(LPARAM(buffer.as_mut_ptr() as isize)),
-        );
-    }
-
-    let text = String::from_utf16_lossy(&buffer[..text_length]);
-    let utf16 = text.encode_utf16().collect::<Vec<u16>>();
-    let start = selection_start as usize;
-    let end = selection_end as usize;
-    if start >= end || end > utf16.len() {
-        return Err("Standard edit selection range is invalid".to_string());
-    }
-
-    normalize_selected_text(String::from_utf16_lossy(&utf16[start..end]))
-}
-
-#[cfg(target_os = "windows")]
-fn selected_text_from_clipboard_fallback() -> Result<String, String> {
-    let original_clipboard = read_clipboard_text_native().unwrap_or_default();
-    send_copy_shortcut_native()?;
-    thread::sleep(Duration::from_millis(120));
-
-    let selected_text = read_clipboard_text_native().unwrap_or_default();
-    if !original_clipboard.is_empty() && selected_text != original_clipboard {
-        if let Err(error) = set_clipboard_text_native(&original_clipboard) {
-            log::warn!("failed to restore text clipboard after compatibility fallback: {error}");
-        }
-    }
-
-    normalize_selected_text(selected_text)
-}
-
-#[cfg(target_os = "windows")]
-fn send_copy_shortcut_native() -> Result<(), String> {
-    let inputs = [
-        keyboard_input(VK_CONTROL.0 as u16, false),
-        keyboard_input(VK_C.0 as u16, false),
-        keyboard_input(VK_C.0 as u16, true),
-        keyboard_input(VK_CONTROL.0 as u16, true),
-    ];
-    let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
-    if sent == inputs.len() as u32 {
-        Ok(())
-    } else {
-        Err("Failed to send Ctrl+C compatibility fallback".to_string())
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn keyboard_input(vk: u16, key_up: bool) -> INPUT {
-    INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 {
-            ki: KEYBDINPUT {
-                wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
-                wScan: 0,
-                dwFlags: if key_up { KEYEVENTF_KEYUP } else { Default::default() },
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    }
-}
-
-#[cfg(target_os = "windows")]
 fn read_clipboard_text_native() -> Result<String, String> {
     let _clipboard = ClipboardSession::open()?;
     let available = unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT_FORMAT).is_ok() };
@@ -1121,31 +1016,6 @@ fn read_clipboard_text_native() -> Result<String, String> {
         let _ = GlobalUnlock(global);
     }
     Ok(text)
-}
-
-#[cfg(target_os = "windows")]
-fn set_clipboard_text_native(value: &str) -> Result<(), String> {
-    let _clipboard = ClipboardSession::open()?;
-    unsafe { EmptyClipboard() }.map_err(|error| error.message().to_string())?;
-    if value.is_empty() {
-        return Ok(());
-    }
-
-    let mut utf16 = value.encode_utf16().collect::<Vec<u16>>();
-    utf16.push(0);
-    let byte_len = utf16.len() * size_of::<u16>();
-    let handle = unsafe { GlobalAlloc(GMEM_MOVEABLE, byte_len) }
-        .map_err(|error| error.message().to_string())?;
-    let ptr = unsafe { GlobalLock(handle) } as *mut u16;
-    if ptr.is_null() {
-        return Err("Failed to lock clipboard allocation".to_string());
-    }
-    unsafe {
-        ptr.copy_from_nonoverlapping(utf16.as_ptr(), utf16.len());
-        let _ = GlobalUnlock(handle);
-        SetClipboardData(CF_UNICODETEXT_FORMAT, Some(HANDLE(handle.0))).map_err(|error| error.message().to_string())?;
-    }
-    Ok(())
 }
 
 #[cfg(target_os = "windows")]
