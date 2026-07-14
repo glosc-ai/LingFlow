@@ -4,7 +4,7 @@ export default defineManifest({
   manifest_version: 3,
   name: 'LingFlow',
   description: 'Seamless bilingual reading and translation assistant.',
-  version: '0.0.3',
+  version: '0.4.0',
   action: {
     default_title: 'LingFlow',
     default_popup: 'index.html',
