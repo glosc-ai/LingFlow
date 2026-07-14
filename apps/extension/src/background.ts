@@ -2,6 +2,7 @@ import { TranslationScheduler, type ProviderHttpClient, type TranslationSchedule
 import {
   DEFAULT_SETTINGS,
   SETTINGS_STORAGE_KEY,
+  mergeDesktopTranslationSettings,
   type BackgroundMessage,
   type DesktopStatusMessageResponse,
   type LingFlowSettings,
@@ -10,6 +11,10 @@ import {
   type TranslationMessageResponse,
 } from './shared/messages';
 
+const DEFAULT_BACKGROUND_TIMEOUT_MS = 15_000;
+const PROVIDER_TEST_TIMEOUT_MS = 60_000;
+const TRANSLATION_TIMEOUT_MS = 120_000;
+
 chrome.runtime.onMessage.addListener(
   (
     message: BackgroundMessage,
@@ -17,12 +22,16 @@ chrome.runtime.onMessage.addListener(
     sendResponse: (response: TranslationMessageResponse | ProviderTestMessageResponse | DesktopStatusMessageResponse | SelectionReportMessageResponse) => void,
   ) => {
     if (message.type === 'LF_TRANSLATE_TEXT') {
-      respondAsync(sendResponse, async () => ({ ok: true, value: await translateText(message.text, message.settings) }));
+      respondAsync(
+        sendResponse,
+        async () => ({ ok: true, value: await translateText(message.text, message.settings) }),
+        TRANSLATION_TIMEOUT_MS,
+      );
       return true;
     }
 
     if (message.type === 'LF_TEST_PROVIDER') {
-      respondAsync(sendResponse, () => testProvider(message.settings));
+      respondAsync(sendResponse, () => testProvider(message.settings), PROVIDER_TEST_TIMEOUT_MS);
       return true;
     }
 
@@ -191,6 +200,7 @@ async function testProvider(settings: LingFlowSettings): Promise<ProviderTestMes
 function respondAsync(
   sendResponse: (response: TranslationMessageResponse | ProviderTestMessageResponse | DesktopStatusMessageResponse | SelectionReportMessageResponse) => void,
   task: () => Promise<TranslationMessageResponse | ProviderTestMessageResponse | DesktopStatusMessageResponse | SelectionReportMessageResponse>,
+  timeoutMs = DEFAULT_BACKGROUND_TIMEOUT_MS,
 ) {
   let settled = false;
   const timeout = setTimeout(() => {
@@ -201,9 +211,9 @@ function respondAsync(
     settled = true;
     sendResponse({
       ok: false,
-      error: 'LingFlow background worker timed out. Check that the desktop client is running and reload the extension.',
+      error: `LingFlow background worker timed out after ${Math.round(timeoutMs / 1000)} seconds. Check the desktop client and translation provider status.`,
     });
-  }, 15000);
+  }, timeoutMs);
 
   task()
     .then((response) => {
@@ -301,19 +311,7 @@ async function resolveTranslationSettings(settings: LingFlowSettings): Promise<L
   }
 
   const desktopSettings = (await response.json()) as Partial<LingFlowSettings>;
-  const targetLanguage =
-    settings.targetLanguage === 'auto'
-      ? desktopSettings.targetLanguage || DEFAULT_SETTINGS.targetLanguage
-      : settings.targetLanguage || desktopSettings.targetLanguage || DEFAULT_SETTINGS.targetLanguage;
-
-  return {
-    ...DEFAULT_SETTINGS,
-    ...desktopSettings,
-    ...settings,
-    targetLanguage,
-    useLocalProxy: true,
-    localProxyUrl: settings.localProxyUrl ?? DEFAULT_SETTINGS.localProxyUrl,
-  };
+  return mergeDesktopTranslationSettings(settings, desktopSettings);
 }
 
 function normalizeTargetLanguage(language?: string) {

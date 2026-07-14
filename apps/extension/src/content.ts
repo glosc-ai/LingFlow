@@ -8,6 +8,9 @@ import {
 import {
   DEFAULT_SETTINGS,
   SETTINGS_STORAGE_KEY,
+  mergeLingFlowSettings,
+  normalizeInputTranslationShortcut,
+  resolveInputTranslationDirection,
   type BackgroundMessage,
   type ContentMessage,
   type ContentMessageResponse,
@@ -16,7 +19,9 @@ import {
 } from './shared/messages';
 
 const SIDEBAR_BUTTON_ID = 'lingflow-page-toggle';
+const INPUT_TRANSLATION_TOAST_ID = 'lingflow-input-translation-toast';
 const MAX_PAGE_SEGMENTS = 800;
+const MAX_INPUT_TRANSLATION_CHARS = 20000;
 const TRANSLATION_CONCURRENCY = 10;
 let pageTranslated = false;
 let pageTranslationRunning = false;
@@ -30,18 +35,24 @@ let lazyRunId = 0;
 let mutationScanTimer: number | undefined;
 let sidebarRefreshTimer: number | undefined;
 let extensionContextInvalidated = false;
+let currentSettings: LingFlowSettings | undefined;
+let inputTranslationToastTimer: number | undefined;
 const queuedSegments: ReadableSegment[] = [];
 const queuedSegmentIds = new Set<string>();
 const translatedSegmentIds = new Set<string>();
 const observedSegmentIds = new Set<string>();
 const translationCache = new Map<string, TranslationMessageResponse>();
+const activeInputTranslations = new WeakSet<HTMLElement>();
 let lastSelectionReportAt = 0;
 
+void refreshContentSettings().catch(handleContentScriptError);
 void refreshSidebarButtonVisibility().catch(handleContentScriptError);
 sidebarRefreshTimer = window.setInterval(() => {
   void refreshSidebarButtonVisibility().catch(handleContentScriptError);
 }, 10000);
 document.addEventListener('mouseup', handleMouseUp, true);
+document.addEventListener('keydown', handleInputTranslationKeyDown, true);
+chrome.storage.onChanged.addListener(handleStorageChange);
 
 chrome.runtime.onMessage.addListener(
   (
@@ -69,6 +80,296 @@ chrome.runtime.onMessage.addListener(
 
 function handleMouseUp(event: MouseEvent) {
   void reportBrowserSelection(event).catch(handleContentScriptError);
+}
+
+function handleInputTranslationKeyDown(event: KeyboardEvent) {
+  const settings = currentSettings;
+  if (
+    !settings?.enabled ||
+    settings.inputTranslationEnabled === false ||
+    event.defaultPrevented ||
+    event.repeat ||
+    event.isComposing ||
+    !matchesInputTranslationShortcut(event, settings.inputTranslationShortcut)
+  ) {
+    return;
+  }
+
+  const editable = findEditableTarget(event);
+  if (!editable || activeInputTranslations.has(editable)) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  let snapshot: EditableSnapshot;
+  try {
+    snapshot = createEditableSnapshot(editable);
+  } catch (error) {
+    showInputTranslationToast(error instanceof Error ? error.message : String(error), 'error');
+    return;
+  }
+
+  const sourceText = snapshot.text.trim();
+  if (!sourceText) {
+    showInputTranslationToast('当前输入框中没有可翻译的文字', 'error');
+    return;
+  }
+  if (sourceText.length > MAX_INPUT_TRANSLATION_CHARS) {
+    showInputTranslationToast(`输入内容超过 ${MAX_INPUT_TRANSLATION_CHARS} 字符，请先选择需要翻译的部分`, 'error');
+    return;
+  }
+
+  const translationDirection = resolveInputTranslationDirection(sourceText);
+  if (!translationDirection) {
+    showInputTranslationToast('未识别到可翻译的中文或英文内容', 'error');
+    return;
+  }
+  const targetLanguageLabel = translationDirection.targetLanguage === 'en' ? '英文' : '中文';
+  const inputTranslationSettings: LingFlowSettings = {
+    ...settings,
+    sourceLanguage: translationDirection.sourceLanguage,
+    targetLanguage: translationDirection.targetLanguage,
+  };
+
+  activeInputTranslations.add(editable);
+  showInputTranslationToast(`正在翻译为${targetLanguageLabel}…`, 'loading');
+  void sendTranslateMessage(sourceText, inputTranslationSettings)
+    .then((response) => {
+      if (!response) {
+        throw new Error('LingFlow 后台未响应，请重新加载扩展');
+      }
+      if (!response.ok) {
+        throw new Error(response.error);
+      }
+      snapshot.apply(response.value.text);
+      showInputTranslationToast(`已翻译为${targetLanguageLabel}并写入输入框`, 'success');
+    })
+    .catch((error: unknown) => {
+      if (isExtensionContextInvalidatedError(error)) {
+        disposeContentScriptRuntime();
+        return;
+      }
+      showInputTranslationToast(error instanceof Error ? error.message : String(error), 'error');
+    })
+    .finally(() => activeInputTranslations.delete(editable));
+}
+
+function handleStorageChange(
+  changes: Record<string, chrome.storage.StorageChange>,
+  areaName: chrome.storage.AreaName,
+) {
+  if (areaName !== 'local' || !changes[SETTINGS_STORAGE_KEY]) {
+    return;
+  }
+  const next = changes[SETTINGS_STORAGE_KEY].newValue as Partial<LingFlowSettings> | undefined;
+  currentSettings = mergeLingFlowSettings(next);
+}
+
+async function refreshContentSettings() {
+  currentSettings = await loadSettings();
+}
+
+type EditableElement = HTMLInputElement | HTMLTextAreaElement | HTMLElement;
+
+interface EditableSnapshot {
+  readonly text: string;
+  readonly apply: (translation: string) => void;
+}
+
+function findEditableTarget(event: KeyboardEvent): EditableElement | null {
+  for (const target of event.composedPath()) {
+    if (target instanceof HTMLTextAreaElement && !target.disabled && !target.readOnly) {
+      return target;
+    }
+    if (target instanceof HTMLInputElement && isTranslatableInput(target)) {
+      return target;
+    }
+    if (target instanceof HTMLElement) {
+      const host = target.closest<HTMLElement>('[contenteditable]:not([contenteditable="false"])');
+      if (host?.isContentEditable && host.getAttribute('aria-disabled') !== 'true') {
+        return host;
+      }
+    }
+  }
+  return null;
+}
+
+function isTranslatableInput(input: HTMLInputElement) {
+  const type = input.type.toLowerCase();
+  return !input.disabled && !input.readOnly && ['text', 'search', 'url', 'tel'].includes(type);
+}
+
+function createEditableSnapshot(editable: EditableElement): EditableSnapshot {
+  if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+    return createTextControlSnapshot(editable);
+  }
+  return createContentEditableSnapshot(editable);
+}
+
+function createTextControlSnapshot(control: HTMLInputElement | HTMLTextAreaElement): EditableSnapshot {
+  const originalValue = control.value;
+  const selectionStart = control.selectionStart ?? 0;
+  const selectionEnd = control.selectionEnd ?? selectionStart;
+  const replaceSelection = selectionEnd > selectionStart;
+  const text = replaceSelection ? originalValue.slice(selectionStart, selectionEnd) : originalValue;
+
+  return {
+    text,
+    apply(translation) {
+      if (!control.isConnected) {
+        throw new Error('原输入框已从页面中移除');
+      }
+      if (replaceSelection) {
+        if (control.value.slice(selectionStart, selectionEnd) !== text) {
+          throw new Error('翻译期间输入内容已发生变化，未覆盖当前文字');
+        }
+      } else if (control.value !== originalValue) {
+        throw new Error('翻译期间输入内容已发生变化，未覆盖当前文字');
+      }
+
+      const nextValue = replaceSelection
+        ? `${control.value.slice(0, selectionStart)}${translation}${control.value.slice(selectionEnd)}`
+        : translation;
+      setNativeTextControlValue(control, nextValue);
+      const caret = replaceSelection ? selectionStart + translation.length : translation.length;
+      control.focus({ preventScroll: true });
+      control.setSelectionRange(caret, caret);
+      control.dispatchEvent(
+        new InputEvent('input', {
+          bubbles: true,
+          composed: true,
+          data: translation,
+          inputType: 'insertText',
+        }),
+      );
+    },
+  };
+}
+
+function setNativeTextControlValue(control: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  const prototype = control instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+  if (setter) {
+    setter.call(control, value);
+  } else {
+    control.value = value;
+  }
+}
+
+function createContentEditableSnapshot(host: HTMLElement): EditableSnapshot {
+  const originalHtml = host.innerHTML;
+  const selection = window.getSelection();
+  let range: Range;
+  if (selection?.rangeCount) {
+    const selectedRange = selection.getRangeAt(0);
+    const ancestor =
+      selectedRange.commonAncestorContainer instanceof Element
+        ? selectedRange.commonAncestorContainer
+        : selectedRange.commonAncestorContainer.parentElement;
+    if (!selection.isCollapsed && ancestor && host.contains(ancestor)) {
+      range = selectedRange.cloneRange();
+    } else {
+      range = document.createRange();
+      range.selectNodeContents(host);
+    }
+  } else {
+    range = document.createRange();
+    range.selectNodeContents(host);
+  }
+  const text = range.toString();
+
+  return {
+    text,
+    apply(translation) {
+      if (!host.isConnected) {
+        throw new Error('原编辑区域已从页面中移除');
+      }
+      if (host.innerHTML !== originalHtml) {
+        throw new Error('翻译期间编辑内容已发生变化，未覆盖当前文字');
+      }
+
+      host.focus({ preventScroll: true });
+      const currentSelection = window.getSelection();
+      currentSelection?.removeAllRanges();
+      currentSelection?.addRange(range);
+      if (!document.execCommand('insertText', false, translation)) {
+        range.deleteContents();
+        const textNode = document.createTextNode(translation);
+        range.insertNode(textNode);
+        range.setStartAfter(textNode);
+        range.collapse(true);
+        currentSelection?.removeAllRanges();
+        currentSelection?.addRange(range);
+        host.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            composed: true,
+            data: translation,
+            inputType: 'insertText',
+          }),
+        );
+      }
+    },
+  };
+}
+
+function matchesInputTranslationShortcut(event: KeyboardEvent, shortcut?: string) {
+  let normalized: string;
+  try {
+    normalized = normalizeInputTranslationShortcut(
+      shortcut || DEFAULT_SETTINGS.inputTranslationShortcut || 'Alt+R',
+    );
+  } catch {
+    normalized = DEFAULT_SETTINGS.inputTranslationShortcut || 'Alt+R';
+  }
+  const parts = normalized.split('+');
+  const expectedKey = parts.at(-1)?.toLowerCase();
+  const eventKey = event.key === ' ' ? 'space' : event.key.toLowerCase();
+  return (
+    event.ctrlKey === parts.includes('Ctrl') &&
+    event.altKey === parts.includes('Alt') &&
+    event.shiftKey === parts.includes('Shift') &&
+    !event.metaKey &&
+    eventKey === expectedKey
+  );
+}
+
+function showInputTranslationToast(message: string, tone: 'loading' | 'success' | 'error') {
+  let host = document.getElementById(INPUT_TRANSLATION_TOAST_ID);
+  if (!host) {
+    host = document.createElement('div');
+    host.id = INPUT_TRANSLATION_TOAST_ID;
+    host.setAttribute('data-lingflow-ui', 'true');
+    host.style.setProperty('all', 'initial', 'important');
+    host.style.setProperty('position', 'fixed', 'important');
+    host.style.setProperty('right', '20px', 'important');
+    host.style.setProperty('bottom', '20px', 'important');
+    host.style.setProperty('z-index', '2147483647', 'important');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `<style>
+      .toast { max-width: 360px; border: 1px solid #cbd5e1; border-radius: 12px; background: #fff; color: #172033; box-shadow: 0 14px 36px rgba(15, 23, 42, .2); font: 13px/1.55 system-ui, sans-serif; padding: 10px 14px; }
+      .toast[data-tone="loading"] { border-color: #7dd3fc; color: #075985; }
+      .toast[data-tone="success"] { border-color: #6ee7b7; color: #047857; }
+      .toast[data-tone="error"] { border-color: #fda4af; color: #be123c; }
+      @media (prefers-color-scheme: dark) { .toast { background: #182131; border-color: #475569; color: #e5edf8; } }
+    </style><div class="toast" role="status"></div>`;
+    document.documentElement.appendChild(host);
+  }
+
+  const toast = host.shadowRoot?.querySelector<HTMLElement>('.toast');
+  if (!toast) {
+    return;
+  }
+  toast.dataset.tone = tone;
+  toast.textContent = message;
+  if (inputTranslationToastTimer) {
+    window.clearTimeout(inputTranslationToastTimer);
+  }
+  if (tone !== 'loading') {
+    inputTranslationToastTimer = window.setTimeout(() => host?.remove(), tone === 'success' ? 1800 : 4000);
+  }
 }
 
 async function handleContentMessage(message: ContentMessage): Promise<ContentMessageResponse> {
@@ -478,8 +779,18 @@ function disposeContentScriptRuntime() {
     window.clearTimeout(mutationScanTimer);
     mutationScanTimer = undefined;
   }
+  if (inputTranslationToastTimer) {
+    window.clearTimeout(inputTranslationToastTimer);
+    inputTranslationToastTimer = undefined;
+  }
 
   document.removeEventListener('mouseup', handleMouseUp, true);
+  document.removeEventListener('keydown', handleInputTranslationKeyDown, true);
+  try {
+    chrome.storage.onChanged.removeListener(handleStorageChange);
+  } catch {
+    // Reloading an unpacked extension invalidates the old content-script context.
+  }
   lazyObserver?.disconnect();
   lazyObserver = undefined;
   mutationObserver?.disconnect();
@@ -490,6 +801,7 @@ function disposeContentScriptRuntime() {
   activeTranslations = 0;
   pageTranslationRunning = false;
   document.getElementById(SIDEBAR_BUTTON_ID)?.remove();
+  document.getElementById(INPUT_TRANSLATION_TOAST_ID)?.remove();
 }
 
 function handleContentScriptError(error: unknown) {
@@ -732,7 +1044,7 @@ async function loadSettings(): Promise<LingFlowSettings> {
 
   const result = await chrome.storage.local.get(SETTINGS_STORAGE_KEY);
   const stored = result[SETTINGS_STORAGE_KEY] as Partial<LingFlowSettings> | undefined;
-  return { ...DEFAULT_SETTINGS, ...stored };
+  return mergeLingFlowSettings(stored);
 }
 
 async function resolveEffectiveTargetLanguage(settings: LingFlowSettings) {

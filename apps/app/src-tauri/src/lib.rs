@@ -60,6 +60,8 @@ const SECRET_FIELDS: &[&str] = &[
 ];
 const DEFAULT_LOCAL_PROXY_HOST: &str = "127.0.0.1";
 const DEFAULT_LOCAL_PROXY_PORT: u16 = 47631;
+const LOCAL_PROXY_QUEUE_CAPACITY: usize = 128;
+const LOCAL_PROXY_WORKER_COUNT: usize = 16;
 #[cfg(desktop)]
 const TRAY_MENU_SHOW: &str = "show-main-window";
 #[cfg(desktop)]
@@ -1460,8 +1462,28 @@ fn start_local_proxy(state: LocalProxyState, addr: String) -> Result<(), String>
     thread::spawn(move || {
         log::info!("LingFlow local proxy listening on http://{addr}");
 
+        let (request_sender, request_receiver) =
+            std::sync::mpsc::sync_channel::<tiny_http::Request>(LOCAL_PROXY_QUEUE_CAPACITY);
+        let request_receiver = Arc::new(Mutex::new(request_receiver));
+        for _ in 0..LOCAL_PROXY_WORKER_COUNT {
+            let worker_receiver = request_receiver.clone();
+            let worker_state = state.clone();
+            thread::spawn(move || loop {
+                let request = match worker_receiver.lock() {
+                    Ok(receiver) => match receiver.recv() {
+                        Ok(request) => request,
+                        Err(_) => break,
+                    },
+                    Err(_) => break,
+                };
+                handle_local_proxy_request(request, &worker_state);
+            });
+        }
+
         for request in server.incoming_requests() {
-            handle_local_proxy_request(request, &state);
+            if request_sender.send(request).is_err() {
+                break;
+            }
         }
     });
 

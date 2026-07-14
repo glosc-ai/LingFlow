@@ -235,6 +235,38 @@ select {
   opacity: 0.62;
 }
 
+.input-shortcut-config {
+  display: grid;
+  gap: 6px;
+}
+
+.input-shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.input-shortcut-recorder {
+  caret-color: transparent;
+  cursor: pointer;
+  user-select: none;
+}
+
+.input-shortcut-recorder.recording {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+.input-shortcut-hint {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.input-shortcut-hint.error {
+  color: var(--danger);
+}
+
 .readonly-field {
   display: flex;
   min-height: 36px;

@@ -19,6 +19,9 @@ import { cn } from '@/lib/utils';
 import {
   DEFAULT_SETTINGS,
   SETTINGS_STORAGE_KEY,
+  inputTranslationShortcutFromKeyEvent,
+  mergeLingFlowSettings,
+  normalizeInputTranslationShortcut,
   type BackgroundMessage,
   type ContentMessage,
   type ContentMessageResponse,
@@ -65,6 +68,11 @@ function App() {
   const [darkMode, setDarkMode] = useState(false);
   const [desktopSettings, setDesktopSettings] = useState<DesktopSettings | null>(null);
   const [desktopConnection, setDesktopConnection] = useState<DesktopConnectionState>('checking');
+  const [inputShortcutDraft, setInputShortcutDraft] = useState(
+    DEFAULT_SETTINGS.inputTranslationShortcut ?? 'Alt+R',
+  );
+  const [inputShortcutError, setInputShortcutError] = useState('');
+  const [inputShortcutRecording, setInputShortcutRecording] = useState(false);
 
   const useLocalProxy = settings.useLocalProxy !== false;
   const localProxyUrl = settings.localProxyUrl ?? DEFAULT_SETTINGS.localProxyUrl ?? '';
@@ -89,6 +97,11 @@ function App() {
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode);
   }, [darkMode]);
+
+  useEffect(() => {
+    setInputShortcutDraft(settings.inputTranslationShortcut ?? DEFAULT_SETTINGS.inputTranslationShortcut ?? 'Alt+R');
+    setInputShortcutError('');
+  }, [settings.inputTranslationShortcut]);
 
   useEffect(() => {
     if (!useLocalProxy) {
@@ -136,7 +149,7 @@ function App() {
 
     chrome.storage.local.get(SETTINGS_STORAGE_KEY).then((result) => {
       const stored = result[SETTINGS_STORAGE_KEY] as Partial<LingFlowSettings> | undefined;
-      const next = sanitizeSettingsForStorage({ ...DEFAULT_SETTINGS, ...stored });
+      const next = sanitizeSettingsForStorage(mergeLingFlowSettings(stored));
       setSettings(next);
       chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: next });
       setStatus(next.enabled ? '就绪 / 本地代理已连接' : '扩展已暂停');
@@ -152,6 +165,17 @@ function App() {
     }
     setStatus(nextStatus);
     setStatusTone(sanitized.enabled ? 'ok' : 'warn');
+  }
+
+  async function applyInputShortcut() {
+    try {
+      const normalized = normalizeInputTranslationShortcut(inputShortcutDraft);
+      setInputShortcutDraft(normalized);
+      setInputShortcutError('');
+      await updateSettings({ ...settings, inputTranslationShortcut: normalized }, `输入框快捷键已更新为 ${normalized}`);
+    } catch (error) {
+      setInputShortcutError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function testProviderConnection() {
@@ -306,6 +330,56 @@ function App() {
                 ))}
               </SelectField>
             </Field>
+            <Toggle
+              checked={settings.inputTranslationEnabled !== false}
+              label="输入框快捷翻译"
+              onChange={(checked) =>
+                updateSettings(
+                  { ...settings, inputTranslationEnabled: checked },
+                  checked ? '输入框快捷翻译已启用' : '输入框快捷翻译已关闭',
+                )
+              }
+            />
+            <div className="input-shortcut-config">
+              <span className="field-label">输入框快捷键</span>
+              <div className="input-shortcut-row">
+                <TextField
+                  aria-invalid={Boolean(inputShortcutError)}
+                  aria-label="输入框翻译快捷键，聚焦后直接按下组合键"
+                  className={cn('input-shortcut-recorder', inputShortcutRecording && 'recording')}
+                  disabled={settings.inputTranslationEnabled === false}
+                  onBlur={() => setInputShortcutRecording(false)}
+                  onFocus={() => {
+                    setInputShortcutRecording(true);
+                    setInputShortcutError('');
+                  }}
+                  onKeyDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    try {
+                      const shortcut = inputTranslationShortcutFromKeyEvent(event);
+                      if (shortcut) {
+                        setInputShortcutDraft(shortcut);
+                        setInputShortcutError('');
+                      }
+                    } catch (error) {
+                      setInputShortcutError(error instanceof Error ? error.message : String(error));
+                    }
+                  }}
+                  readOnly
+                  value={inputShortcutDraft}
+                />
+                <Button disabled={settings.inputTranslationEnabled === false} onClick={() => void applyInputShortcut()}>
+                  应用
+                </Button>
+              </div>
+              <span className={cn('input-shortcut-hint', inputShortcutError && 'error')}>
+                {inputShortcutError ||
+                  (inputShortcutRecording
+                    ? '请直接按下新的组合键，捕获后点击“应用”。'
+                    : '点击输入框后直接按组合键。默认 Alt+R；有选区时仅替换选区。')}
+              </span>
+            </div>
           </div>
         </Section>
 
@@ -1008,6 +1082,9 @@ function sanitizeSettingsForStorage(settings: LingFlowSettings): LingFlowSetting
 
   return {
     enabled: settings.enabled,
+    inputTranslationEnabled: settings.inputTranslationEnabled,
+    inputTranslationShortcut: settings.inputTranslationShortcut,
+    inputTranslationShortcutVersion: settings.inputTranslationShortcutVersion,
     useLocalProxy: true,
     localProxyUrl: settings.localProxyUrl,
     provider: settings.provider,
