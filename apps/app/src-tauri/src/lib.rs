@@ -6,39 +6,41 @@
     thread,
 };
 use rusqlite::{params, Connection};
-use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size};
+use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size, WindowEvent};
+#[cfg(desktop)]
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+};
 use tauri_plugin_opener::OpenerExt;
 
 #[cfg(target_os = "windows")]
 use std::{
     mem::size_of,
     ptr::null_mut,
-    sync::{mpsc, OnceLock},
     time::{Duration, Instant},
 };
 
 #[cfg(target_os = "windows")]
 use windows::{
-    core::{BOOL, Interface},
+    core::Interface,
     Win32::{
-        Foundation::{CloseHandle, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{CloseHandle, GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, POINT, WPARAM},
         System::{
             Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED},
-            DataExchange::{CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard},
-            Diagnostics::ToolHelp::{
-                CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-                TH32CS_SNAPPROCESS,
-            },
-            Memory::{GlobalLock, GlobalSize, GlobalUnlock},
-            Threading::{GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION},
+            DataExchange::{CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, SetClipboardData},
+            Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE},
+            Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION},
         },
         UI::{
             Accessibility::{CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId},
+            Input::KeyboardAndMouse::{
+                SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL, VK_C,
+            },
             WindowsAndMessaging::{
-                CallNextHookEx, GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetWindowThreadProcessId,
-                GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, SetWindowsHookExW, UnhookWindowsHookEx,
-                EnumWindows, GetWindowRect, WindowFromPoint, GUITHREADINFO, HTCAPTION, MSLLHOOKSTRUCT, MSG, GWL_EXSTYLE, WH_MOUSE_LL,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NCHITTEST, WM_RBUTTONDOWN, WM_RBUTTONUP, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+                GetForegroundWindow, GetGUIThreadInfo, GetWindowLongPtrW, GetWindowThreadProcessId,
+                SendMessageW, SetWindowLongPtrW, WindowFromPoint, GUITHREADINFO, GWL_EXSTYLE,
+                WM_GETTEXT, WM_GETTEXTLENGTH, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
             },
         },
     },
@@ -58,27 +60,17 @@ const SECRET_FIELDS: &[&str] = &[
 ];
 const DEFAULT_LOCAL_PROXY_HOST: &str = "127.0.0.1";
 const DEFAULT_LOCAL_PROXY_PORT: u16 = 47631;
+#[cfg(desktop)]
+const TRAY_MENU_SHOW: &str = "show-main-window";
+#[cfg(desktop)]
+const TRAY_MENU_QUIT: &str = "quit-app";
 #[cfg(not(target_os = "windows"))]
 const SECRET_DATA_PREFIX: &str = "secret:";
 
 #[cfg(target_os = "windows")]
 const CF_UNICODETEXT_FORMAT: u32 = 13;
 #[cfg(target_os = "windows")]
-const GLOBAL_MOUSE_UP_EVENT: &str = "lingflow://global-mouse-up";
-
-#[cfg(target_os = "windows")]
-static GLOBAL_MOUSE_UP_TX: OnceLock<mpsc::Sender<ScreenPoint>> = OnceLock::new();
-#[cfg(target_os = "windows")]
-static GLOBAL_MOUSE_DRAG_STATE: OnceLock<Mutex<Option<MouseDragState>>> = OnceLock::new();
-
-#[cfg(target_os = "windows")]
-struct MouseDragState {
-    point: POINT,
-    started_at: Instant,
-    button: u32,
-    started_on_caption: bool,
-}
-
+const EM_GETSEL_MESSAGE: u32 = 0x00B0;
 #[derive(Clone)]
 struct LocalProxyState {
     settings: Arc<RwLock<Option<AppRuntimeSettings>>>,
@@ -117,7 +109,6 @@ struct SelectionDiagnostics {
     stage: String,
     cursor_position: Option<ScreenPoint>,
     process_name: Option<String>,
-    excluded: bool,
     attempts: Vec<SelectionAttempt>,
     result_length: Option<usize>,
     error: Option<String>,
@@ -191,7 +182,11 @@ pub fn run() {
     };
     let app_data_connection = app_data_store.connection.clone();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+    builder
         .manage(proxy_state)
         .manage(selection_state)
         .manage(app_data_store)
@@ -210,7 +205,6 @@ pub fn run() {
             read_foreground_selected_text,
             selection_diagnostics,
             set_overlay_no_activate,
-            list_running_process_names,
             foreground_process_name,
             check_for_updates,
             open_external_url
@@ -229,9 +223,11 @@ pub fn run() {
                 if let Err(error) = center_main_window_at_screen_ratio(app.handle(), 0.6) {
                     log::warn!("failed to size LingFlow main window: {error}");
                 }
+                #[cfg(desktop)]
+                if let Err(error) = setup_system_tray(app.handle()) {
+                    log::warn!("failed to setup LingFlow tray icon: {error}");
+                }
             }
-            #[cfg(target_os = "windows")]
-            start_global_mouse_up_listener(app.handle().clone());
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -241,10 +237,87 @@ pub fn run() {
             }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if close_to_tray_enabled(window.app_handle()) {
+                    api.prevent_close();
+                    if let Err(error) = window.hide() {
+                        log::warn!("failed to hide LingFlow main window: {error}");
+                    }
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
+#[cfg(desktop)]
+fn setup_system_tray(app_handle: &tauri::AppHandle) -> Result<(), String> {
+    let show = MenuItem::with_id(app_handle, TRAY_MENU_SHOW, "显示灵流", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let quit = MenuItem::with_id(app_handle, TRAY_MENU_QUIT, "退出灵流", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let menu = Menu::with_items(app_handle, &[&show, &quit]).map_err(|error| error.to_string())?;
+
+    let mut builder = TrayIconBuilder::with_id("lingflow-main")
+        .tooltip("灵流")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            TRAY_MENU_SHOW => restore_main_window(app),
+            TRAY_MENU_QUIT => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) {
+                restore_main_window(tray.app_handle());
+            }
+        });
+
+    if let Some(icon) = app_handle.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+
+    builder.build(app_handle).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(desktop)]
+fn restore_main_window(app_handle: &tauri::AppHandle) {
+    let Some(window) = app_handle.get_webview_window("main") else {
+        return;
+    };
+    if let Err(error) = window.show() {
+        log::warn!("failed to show LingFlow main window: {error}");
+    }
+    if let Err(error) = window.set_focus() {
+        log::warn!("failed to focus LingFlow main window: {error}");
+    }
+}
+
+fn close_to_tray_enabled(app_handle: &tauri::AppHandle) -> bool {
+    let state = app_handle.state::<LocalProxyState>();
+    state
+        .settings
+        .read()
+        .ok()
+        .and_then(|settings| settings.as_ref().and_then(|settings| settings.close_to_tray))
+        .unwrap_or(false)
+}
 
 fn center_main_window_at_screen_ratio(app_handle: &tauri::AppHandle, ratio: f64) -> Result<(), String> {
     let Some(window) = app_handle.get_webview_window("main") else {
@@ -379,10 +452,8 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
 #[tauri::command]
 async fn capture_foreground_selection(
     state: tauri::State<'_, SelectionCaptureState>,
-    excluded_apps: Vec<String>,
     cursor_position: Option<ScreenPoint>,
-    _clipboard_fallback_enabled: Option<bool>,
-    _clipboard_fallback_apps: Option<Vec<String>>,
+    clipboard_fallback_enabled: Option<bool>,
 ) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
@@ -392,8 +463,8 @@ async fn capture_foreground_selection(
             capture_foreground_selection_with_state(
                 inner,
                 diagnostics,
-                excluded_apps,
                 cursor_position,
+                clipboard_fallback_enabled.unwrap_or(false),
             )
         })
             .await
@@ -401,7 +472,7 @@ async fn capture_foreground_selection(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (state, excluded_apps, cursor_position, _clipboard_fallback_enabled, _clipboard_fallback_apps);
+        let _ = (state, cursor_position, clipboard_fallback_enabled);
         Err("Global selection translation is not available on Android or other non-Windows clients".to_string())
     }
 }
@@ -409,15 +480,14 @@ async fn capture_foreground_selection(
 #[tauri::command]
 async fn read_foreground_selected_text(
     state: tauri::State<'_, SelectionCaptureState>,
-    excluded_apps: Vec<String>,
 ) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        capture_foreground_selection(state, excluded_apps, None, Some(false), Some(Vec::new())).await
+        capture_foreground_selection(state, None, Some(false)).await
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (state, excluded_apps);
+        let _ = state;
         Err("Foreground selection reading is only available on the Windows desktop client".to_string())
     }
 }
@@ -432,7 +502,7 @@ fn selection_diagnostics(state: tauri::State<SelectionCaptureState>) -> Result<S
 }
 
 #[tauri::command]
-fn set_overlay_no_activate(app: tauri::AppHandle, label: String) -> Result<(), String> {
+fn set_overlay_no_activate(app: tauri::AppHandle, label: String, enabled: Option<bool>) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let window = app
@@ -442,56 +512,20 @@ fn set_overlay_no_activate(app: tauri::AppHandle, label: String) -> Result<(), S
         let hwnd = HWND(hwnd.0);
         unsafe {
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            SetWindowLongPtrW(
-                hwnd,
-                GWL_EXSTYLE,
-                style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize,
-            );
+            let no_activate = enabled.unwrap_or(true);
+            let next_style = if no_activate {
+                style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize
+            } else {
+                (style & !(WS_EX_NOACTIVATE.0 as isize)) | WS_EX_TOOLWINDOW.0 as isize
+            };
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next_style);
         }
         Ok(())
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, label);
+        let _ = (app, label, enabled);
         Ok(())
-    }
-}
-
-#[tauri::command]
-fn list_running_process_names() -> Result<Vec<String>, String> {
-    #[cfg(target_os = "windows")]
-    {
-        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
-            .map_err(|error| error.message().to_string())?;
-        let mut entry = PROCESSENTRY32W {
-            dwSize: size_of::<PROCESSENTRY32W>() as u32,
-            ..Default::default()
-        };
-        let mut names = Vec::<String>::new();
-
-        let mut has_entry = unsafe { Process32FirstW(snapshot, &mut entry).is_ok() };
-        while has_entry {
-            let end = entry
-                .szExeFile
-                .iter()
-                .position(|value| *value == 0)
-                .unwrap_or(entry.szExeFile.len());
-            let name = String::from_utf16_lossy(&entry.szExeFile[..end]).trim().to_string();
-            if !name.is_empty() && !names.iter().any(|item| item.eq_ignore_ascii_case(&name)) {
-                names.push(name);
-            }
-            has_entry = unsafe { Process32NextW(snapshot, &mut entry).is_ok() };
-        }
-
-        unsafe {
-            CloseHandle(snapshot).map_err(|error| error.message().to_string())?;
-        }
-        names.sort_by_key(|name| name.to_ascii_lowercase());
-        Ok(names)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok(Vec::new())
     }
 }
 
@@ -499,8 +533,8 @@ fn list_running_process_names() -> Result<Vec<String>, String> {
 fn capture_foreground_selection_with_state(
     inner: Arc<Mutex<SelectionCaptureGuard>>,
     diagnostics: Arc<Mutex<SelectionDiagnostics>>,
-    excluded_apps: Vec<String>,
     cursor_position: Option<ScreenPoint>,
+    allow_safe_copy: bool,
 ) -> Result<String, String> {
     write_selection_diagnostics(&diagnostics, SelectionDiagnostics {
         stage: "started".to_string(),
@@ -536,10 +570,12 @@ fn capture_foreground_selection_with_state(
         guard.last_capture = Some(Instant::now());
     }
 
+    thread::sleep(Duration::from_millis(50));
+
     let result = capture_foreground_selection_inner(
         &diagnostics,
-        &excluded_apps,
         cursor_position,
+        allow_safe_copy,
     );
     if let Err(error) = &result {
         update_selection_diagnostics(&diagnostics, |current| {
@@ -553,8 +589,8 @@ fn capture_foreground_selection_with_state(
 #[cfg(target_os = "windows")]
 fn capture_foreground_selection_inner(
     diagnostics: &Arc<Mutex<SelectionDiagnostics>>,
-    excluded_apps: &[String],
     cursor_position: Option<ScreenPoint>,
+    allow_safe_copy: bool,
 ) -> Result<String, String> {
     let process_name = foreground_process_name_inner()?;
     update_selection_diagnostics(diagnostics, |current| {
@@ -563,18 +599,8 @@ fn capture_foreground_selection_inner(
         current.process_name = Some(process_name.clone());
     });
 
-    if is_excluded_process(&process_name, excluded_apps) {
-        let error = format!("{process_name} is excluded from global selection translation");
-        update_selection_diagnostics(diagnostics, |current| {
-            current.stage = "excluded".to_string();
-            current.excluded = true;
-            current.error = Some(error.clone());
-        });
-        return Err(error);
-    }
-
-    match selected_text_from_uia(cursor_position) {
-        Ok(text) => {
+    match selected_text_from_uia(cursor_position, allow_safe_copy) {
+        Ok(text) if !text.is_empty() => {
             push_selection_attempt(diagnostics, "uia", true, format!("{} chars", text.len()));
             update_selection_diagnostics(diagnostics, |current| {
                 current.stage = "success".to_string();
@@ -582,6 +608,7 @@ fn capture_foreground_selection_inner(
             });
             return Ok(text);
         }
+        Ok(_) => push_selection_attempt(diagnostics, "uia", false, "UIA returned empty text"),
         Err(error) => push_selection_attempt(diagnostics, "uia", false, error),
     }
 
@@ -705,212 +732,7 @@ fn focused_control_window() -> Result<HWND, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn start_global_mouse_up_listener(app_handle: tauri::AppHandle) {
-    let (tx, rx) = mpsc::channel::<ScreenPoint>();
-    let _ = GLOBAL_MOUSE_UP_TX.set(tx);
-    let _ = GLOBAL_MOUSE_DRAG_STATE.set(Mutex::new(None));
-
-    thread::spawn(move || {
-        for point in rx {
-            let _ = app_handle.emit(GLOBAL_MOUSE_UP_EVENT, point);
-        }
-    });
-
-    thread::spawn(move || unsafe {
-        let hook = match SetWindowsHookExW(WH_MOUSE_LL, Some(global_mouse_hook_proc), None, 0) {
-            Ok(hook) => hook,
-            Err(error) => {
-                log::warn!("failed to install global mouse hook: {error}");
-                return;
-            }
-        };
-
-        let mut message = MSG::default();
-        while GetMessageW(&mut message, None, 0, 0).into() {}
-        if let Err(error) = UnhookWindowsHookEx(hook) {
-            log::warn!("failed to unhook global mouse hook: {error}");
-        }
-    });
-}
-
-#[cfg(target_os = "windows")]
-unsafe extern "system" fn global_mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 {
-        let message = wparam.0 as u32;
-        if matches!(message, WM_LBUTTONDOWN | WM_RBUTTONDOWN) {
-            remember_global_mouse_down(message, lparam);
-        } else if matches!(message, WM_LBUTTONUP | WM_RBUTTONUP)
-            && !mouse_event_is_on_lingflow_window(lparam)
-        {
-            if let Some(point) = global_mouse_up_selection_point(message, lparam) {
-                if let Some(tx) = GLOBAL_MOUSE_UP_TX.get() {
-                    let _ = tx.send(ScreenPoint { x: point.x, y: point.y });
-                }
-            }
-        }
-    }
-
-    unsafe { CallNextHookEx(None, code, wparam, lparam) }
-}
-
-#[cfg(target_os = "windows")]
-fn remember_global_mouse_down(message: u32, lparam: LPARAM) {
-    let Some(state) = GLOBAL_MOUSE_DRAG_STATE.get() else {
-        return;
-    };
-    let Some(point) = mouse_event_point(lparam) else {
-        return;
-    };
-    if let Ok(mut current) = state.lock() {
-        *current = Some(MouseDragState {
-            point,
-            started_at: Instant::now(),
-            button: message,
-            started_on_caption: message == WM_LBUTTONDOWN && mouse_point_hits_caption(point),
-        });
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn global_mouse_up_selection_point(message: u32, lparam: LPARAM) -> Option<POINT> {
-    let Some(state) = GLOBAL_MOUSE_DRAG_STATE.get() else {
-        return None;
-    };
-    let Some(up_point) = mouse_event_point(lparam) else {
-        return None;
-    };
-
-    let Ok(mut current) = state.lock() else {
-        return None;
-    };
-    let Some(down) = current.take() else {
-        return None;
-    };
-
-    if !mouse_buttons_match(down.button, message) {
-        return None;
-    }
-    if down.started_on_caption {
-        return None;
-    }
-
-    let dx = i64::from(up_point.x) - i64::from(down.point.x);
-    let dy = i64::from(up_point.y) - i64::from(down.point.y);
-    let distance_squared = dx * dx + dy * dy;
-    if distance_squared >= 64 && down.started_at.elapsed() >= Duration::from_millis(80) {
-        Some(up_point)
-    } else {
-        None
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn mouse_buttons_match(down: u32, up: u32) -> bool {
-    matches!((down, up), (WM_LBUTTONDOWN, WM_LBUTTONUP) | (WM_RBUTTONDOWN, WM_RBUTTONUP))
-}
-
-#[cfg(target_os = "windows")]
-fn mouse_event_point(lparam: LPARAM) -> Option<POINT> {
-    if lparam.0 == 0 {
-        return None;
-    }
-
-    let hook = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
-    Some(POINT {
-        x: hook.pt.x,
-        y: hook.pt.y,
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn mouse_point_hits_caption(point: POINT) -> bool {
-    let hwnd = unsafe { WindowFromPoint(point) };
-    if hwnd.0.is_null() {
-        return false;
-    }
-
-    let hit = unsafe {
-        SendMessageW(
-            hwnd,
-            WM_NCHITTEST,
-            Some(WPARAM(0)),
-            Some(point_to_lparam(point)),
-        )
-    };
-    hit.0 == HTCAPTION as isize
-}
-
-#[cfg(target_os = "windows")]
-fn point_to_lparam(point: POINT) -> LPARAM {
-    let x = point.x as i16 as u16 as u32;
-    let y = point.y as i16 as u16 as u32;
-    LPARAM(((y << 16) | x) as isize)
-}
-
-#[cfg(target_os = "windows")]
-fn mouse_event_is_on_lingflow_window(lparam: LPARAM) -> bool {
-    let Some(point) = mouse_event_point(lparam) else {
-        return false;
-    };
-    point_is_inside_current_process_window(point) || window_from_point_belongs_to_current_process(point)
-}
-
-#[cfg(target_os = "windows")]
-fn window_from_point_belongs_to_current_process(point: POINT) -> bool {
-    let hwnd = unsafe { WindowFromPoint(point) };
-    if hwnd.0.is_null() {
-        return false;
-    }
-
-    window_belongs_to_current_process(hwnd)
-}
-
-#[cfg(target_os = "windows")]
-fn point_is_inside_current_process_window(point: POINT) -> bool {
-    let mut context = WindowHitTestContext { point, hit: false };
-    let context_ptr = &mut context as *mut WindowHitTestContext;
-    let _ = unsafe { EnumWindows(Some(enum_current_process_windows), LPARAM(context_ptr as isize)) };
-    context.hit
-}
-
-#[cfg(target_os = "windows")]
-struct WindowHitTestContext {
-    point: POINT,
-    hit: bool,
-}
-
-#[cfg(target_os = "windows")]
-unsafe extern "system" fn enum_current_process_windows(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let context = unsafe { &mut *(lparam.0 as *mut WindowHitTestContext) };
-    if context.hit || !window_belongs_to_current_process(hwnd) {
-        return true.into();
-    }
-
-    let mut rect = RECT::default();
-    if unsafe { GetWindowRect(hwnd, &mut rect).is_ok() }
-        && context.point.x >= rect.left
-        && context.point.x <= rect.right
-        && context.point.y >= rect.top
-        && context.point.y <= rect.bottom
-    {
-        context.hit = true;
-        return false.into();
-    }
-
-    true.into()
-}
-
-#[cfg(target_os = "windows")]
-fn window_belongs_to_current_process(hwnd: HWND) -> bool {
-    let mut process_id = 0;
-    unsafe {
-        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
-    }
-    process_id != 0 && process_id == unsafe { GetCurrentProcessId() }
-}
-
-#[cfg(target_os = "windows")]
-fn selected_text_from_uia(cursor_position: Option<ScreenPoint>) -> Result<String, String> {
+fn selected_text_from_uia(cursor_position: Option<ScreenPoint>, allow_safe_copy: bool) -> Result<String, String> {
     let _com = ComApartment::init()?;
     let automation: IUIAutomation =
         unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
@@ -921,7 +743,8 @@ fn selected_text_from_uia(cursor_position: Option<ScreenPoint>) -> Result<String
         let point = POINT { x: point.x, y: point.y };
         match unsafe { automation.ElementFromPoint(point) } {
             Ok(element) => match selected_text_from_uia_element(&element) {
-                Ok(text) => return Ok(text),
+                Ok(text) if !text.is_empty() => return Ok(text),
+                Ok(_) => errors.push("point-element: empty selected text".to_string()),
                 Err(error) => errors.push(format!("point-element: {error}")),
             },
             Err(error) => errors.push(format!("point-element lookup: {}", error.message())),
@@ -933,7 +756,8 @@ fn selected_text_from_uia(cursor_position: Option<ScreenPoint>) -> Result<String
         } else {
             match unsafe { automation.ElementFromHandle(point_hwnd) } {
                 Ok(element) => match selected_text_from_uia_element(&element) {
-                    Ok(text) => return Ok(text),
+                    Ok(text) if !text.is_empty() => return Ok(text),
+                    Ok(_) => errors.push("point-window: empty selected text".to_string()),
                     Err(error) => errors.push(format!("point-window: {error}")),
                 },
                 Err(error) => errors.push(format!("point-window lookup: {}", error.message())),
@@ -941,10 +765,20 @@ fn selected_text_from_uia(cursor_position: Option<ScreenPoint>) -> Result<String
         }
     }
 
+    match unsafe { automation.GetFocusedElement() } {
+        Ok(element) => match selected_text_from_uia_element(&element) {
+            Ok(text) if !text.is_empty() => return Ok(text),
+            Ok(_) => errors.push("uia-focused-element: empty selected text".to_string()),
+            Err(error) => errors.push(format!("uia-focused-element: {error}")),
+        },
+        Err(error) => errors.push(format!("uia-focused-element lookup: {}", error.message())),
+    }
+
     match focused_control_window() {
         Ok(hwnd) => match unsafe { automation.ElementFromHandle(hwnd) } {
             Ok(element) => match selected_text_from_uia_element(&element) {
-                Ok(text) => return Ok(text),
+                Ok(text) if !text.is_empty() => return Ok(text),
+                Ok(_) => errors.push("focused-control: empty selected text".to_string()),
                 Err(error) => errors.push(format!("focused-control: {error}")),
             },
             Err(error) => errors.push(format!("focused-control lookup: {}", error.message())),
@@ -952,19 +786,43 @@ fn selected_text_from_uia(cursor_position: Option<ScreenPoint>) -> Result<String
         Err(error) => errors.push(format!("focused-control hwnd: {error}")),
     }
 
-    let hwnd = foreground_window()?;
-    match unsafe { automation.ElementFromHandle(hwnd) } {
-        Ok(element) => match selected_text_from_uia_element(&element) {
-            Ok(text) => Ok(text),
-            Err(error) => {
-                errors.push(format!("foreground-window: {error}"));
+    match foreground_window() {
+        Ok(hwnd) => match unsafe { automation.ElementFromHandle(hwnd) } {
+            Ok(element) => match selected_text_from_uia_element(&element) {
+                Ok(text) if !text.is_empty() => return Ok(text),
+                Ok(_) => errors.push("foreground-window: empty selected text".to_string()),
+                Err(error) => errors.push(format!("foreground-window: {error}")),
+            },
+            Err(error) => errors.push(format!("foreground-window lookup: {}", error.message())),
+        },
+        Err(error) => errors.push(format!("foreground-window hwnd: {error}")),
+    }
+
+    match selected_text_from_standard_edit_selection() {
+        Ok(text) if !text.is_empty() => return Ok(text),
+        Ok(_) => {
+            errors.push("standard-edit-selection: empty selected text".to_string());
+        }
+        Err(error) => {
+            errors.push(format!("standard-edit-selection: {error}"));
+        }
+    };
+
+    if allow_safe_copy {
+        match selected_text_via_safe_copy() {
+            Ok(text) if !text.is_empty() => Ok(text),
+            Ok(_) => {
+                errors.push("safe-copy: empty selected text".to_string());
                 Err(errors.join(" | "))
             }
-        },
-        Err(error) => {
-            errors.push(format!("foreground-window lookup: {}", error.message()));
-            Err(errors.join(" | "))
+            Err(error) => {
+                errors.push(format!("safe-copy: {error}"));
+                Err(errors.join(" | "))
+            }
         }
+    } else {
+        errors.push("safe-copy: skipped until the selection icon is clicked".to_string());
+        Err(errors.join(" | "))
     }
 }
 
@@ -985,6 +843,204 @@ fn selected_text_from_uia_element(element: &windows::Win32::UI::Accessibility::I
     }
 
     normalize_selected_text(selected)
+}
+
+#[cfg(target_os = "windows")]
+fn selected_text_from_standard_edit_selection() -> Result<String, String> {
+    let hwnd = focused_control_window()?;
+    let mut selection_start = 0u32;
+    let mut selection_end = 0u32;
+
+    unsafe {
+        SendMessageW(
+            hwnd,
+            EM_GETSEL_MESSAGE,
+            Some(WPARAM((&mut selection_start as *mut u32) as usize)),
+            Some(LPARAM((&mut selection_end as *mut u32) as isize)),
+        );
+    }
+
+    if selection_start == selection_end {
+        return Err("Standard edit control has no active selection".to_string());
+    }
+
+    if selection_start > selection_end {
+        std::mem::swap(&mut selection_start, &mut selection_end);
+    }
+
+    let text_length = unsafe {
+        SendMessageW(hwnd, WM_GETTEXTLENGTH, Some(WPARAM(0)), Some(LPARAM(0))).0 as usize
+    };
+    if text_length == 0 {
+        return Err("Standard edit control has no text".to_string());
+    }
+
+    let mut buffer = vec![0u16; text_length + 1];
+    unsafe {
+        SendMessageW(
+            hwnd,
+            WM_GETTEXT,
+            Some(WPARAM(buffer.len())),
+            Some(LPARAM(buffer.as_mut_ptr() as isize)),
+        );
+    }
+
+    let text = String::from_utf16_lossy(&buffer[..text_length]);
+    let utf16 = text.encode_utf16().collect::<Vec<u16>>();
+    let start = selection_start as usize;
+    let end = selection_end as usize;
+    if start >= end || end > utf16.len() {
+        return Err("Standard edit selection range is invalid".to_string());
+    }
+
+    normalize_selected_text(String::from_utf16_lossy(&utf16[start..end]))
+}
+
+#[cfg(target_os = "windows")]
+fn selected_text_via_safe_copy() -> Result<String, String> {
+    let _restore = ClipboardRestoreGuard::capture()?;
+    clear_clipboard_native()?;
+    send_copy_shortcut_native()?;
+    thread::sleep(Duration::from_millis(30));
+    normalize_selected_text(read_clipboard_text_native().unwrap_or_default())
+}
+
+#[cfg(target_os = "windows")]
+fn clear_clipboard_native() -> Result<(), String> {
+    let _clipboard = ClipboardSession::open()?;
+    unsafe { EmptyClipboard() }.map_err(|error| error.message().to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn send_copy_shortcut_native() -> Result<(), String> {
+    let inputs = [
+        keyboard_input(VK_CONTROL.0 as u16, false),
+        keyboard_input(VK_C.0 as u16, false),
+        keyboard_input(VK_C.0 as u16, true),
+        keyboard_input(VK_CONTROL.0 as u16, true),
+    ];
+    let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+    if sent == inputs.len() as u32 {
+        Ok(())
+    } else {
+        Err("Failed to send Ctrl+C safe copy fallback".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn keyboard_input(vk: u16, key_up: bool) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
+                wScan: 0,
+                dwFlags: if key_up { KEYEVENTF_KEYUP } else { Default::default() },
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct ClipboardRestoreGuard {
+    backup: Vec<ClipboardBackupItem>,
+}
+
+#[cfg(target_os = "windows")]
+struct ClipboardBackupItem {
+    format: u32,
+    bytes: Vec<u8>,
+}
+
+#[cfg(target_os = "windows")]
+impl ClipboardRestoreGuard {
+    fn capture() -> Result<Self, String> {
+        Ok(Self {
+            backup: backup_clipboard_native()?,
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ClipboardRestoreGuard {
+    fn drop(&mut self) {
+        if let Err(error) = restore_clipboard_native(&self.backup) {
+            log::warn!("failed to restore clipboard after safe copy fallback: {error}");
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn backup_clipboard_native() -> Result<Vec<ClipboardBackupItem>, String> {
+    let _clipboard = ClipboardSession::open()?;
+    let mut backup = Vec::new();
+    let mut format = 0u32;
+
+    loop {
+        format = unsafe { EnumClipboardFormats(format) };
+        if format == 0 {
+            break;
+        }
+
+        let handle = unsafe { GetClipboardData(format) }
+            .map_err(|error| error.message().to_string())?;
+        if handle.0.is_null() {
+            continue;
+        }
+
+        let global = HGLOBAL(handle.0);
+        let byte_len = unsafe { GlobalSize(global) };
+        if byte_len == 0 {
+            return Err(format!("Clipboard format {format} cannot be safely backed up"));
+        }
+
+        let ptr = unsafe { GlobalLock(global) } as *const u8;
+        if ptr.is_null() {
+            return Err(format!("Failed to lock clipboard format {format}"));
+        }
+
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, byte_len) }.to_vec();
+        unsafe {
+            let _ = GlobalUnlock(global);
+        }
+        backup.push(ClipboardBackupItem { format, bytes });
+    }
+
+    Ok(backup)
+}
+
+#[cfg(target_os = "windows")]
+fn restore_clipboard_native(backup: &[ClipboardBackupItem]) -> Result<(), String> {
+    let _clipboard = ClipboardSession::open()?;
+    unsafe { EmptyClipboard() }.map_err(|error| error.message().to_string())?;
+
+    for item in backup {
+        let handle = unsafe { GlobalAlloc(GMEM_MOVEABLE, item.bytes.len()) }
+            .map_err(|error| error.message().to_string())?;
+        let ptr = unsafe { GlobalLock(handle) } as *mut u8;
+        if ptr.is_null() {
+            unsafe {
+                let _ = GlobalFree(Some(handle));
+            }
+            return Err(format!("Failed to lock clipboard restore allocation for format {}", item.format));
+        }
+
+        unsafe {
+            ptr.copy_from_nonoverlapping(item.bytes.as_ptr(), item.bytes.len());
+            let _ = GlobalUnlock(handle);
+        }
+
+        if let Err(error) = unsafe { SetClipboardData(item.format, Some(HANDLE(handle.0))) } {
+            unsafe {
+                let _ = GlobalFree(Some(handle));
+            }
+            return Err(format!("Failed to restore clipboard format {}: {}", item.format, error.message()));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -1060,17 +1116,6 @@ impl Drop for ComApartment {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn is_excluded_process(process_name: &str, excluded_apps: &[String]) -> bool {
-    let normalized_process = process_name.trim().to_ascii_lowercase();
-    excluded_apps.iter().any(|item| {
-        let normalized_item = item.trim().to_ascii_lowercase();
-        !normalized_item.is_empty()
-            && (normalized_process == normalized_item
-                || normalized_process.trim_end_matches(".exe") == normalized_item.trim_end_matches(".exe"))
-    })
-}
-
 #[derive(serde::Deserialize)]
 struct HttpRequest {
     url: String,
@@ -1121,6 +1166,7 @@ struct AppRuntimeSettings {
     source_language: Option<String>,
     local_proxy_host: Option<String>,
     local_proxy_port: Option<u16>,
+    close_to_tray: Option<bool>,
     ai_fallback_enabled: Option<bool>,
     ai_sources: Option<Vec<AiServiceSource>>,
     ai_base_url: Option<String>,

@@ -27,6 +27,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { PhysicalPosition, PhysicalSize } from '@tauri-apps/api/dpi';
 import { listen } from '@tauri-apps/api/event';
 import { WebviewWindow, getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { cursorPosition as getCursorPosition } from '@tauri-apps/api/window';
+import { isRegistered, register, unregister } from '@tauri-apps/plugin-global-shortcut';
 import { TranslationScheduler, type AiServiceSourceConfig, type ProviderHttpClient, type TranslatorProvider } from '@lingflow/core';
 import { LingFlowLogo } from '@/components/lingflow-logo';
 import { Button, Card, Field, SelectInput, TextInput, Toggle } from '@/components/ui';
@@ -39,8 +41,9 @@ interface AppSettings {
   readonly onboardingCompleted: boolean;
   readonly localProxyHost: string;
   readonly localProxyPort: number;
+  readonly closeToTray: boolean;
   readonly globalSelectionEnabled: boolean;
-  readonly globalSelectionExcludedApps: readonly string[];
+  readonly globalSelectionShortcut: string;
   readonly aiFallbackEnabled: boolean;
   readonly aiSources: readonly AiServiceSourceConfig[];
   readonly aiBaseUrl?: string;
@@ -101,11 +104,16 @@ interface ExternalSelectionPayload {
   readonly y: number;
 }
 
+interface SelectionOverlayUpdatePayload {
+  readonly text: string;
+  readonly expanded: boolean;
+  readonly status?: string;
+}
+
 interface SelectionDiagnostics {
   readonly stage: string;
   readonly cursorPosition?: { readonly x: number; readonly y: number } | null;
   readonly processName?: string | null;
-  readonly excluded: boolean;
   readonly attempts: readonly { readonly strategy: string; readonly ok: boolean; readonly detail: string }[];
   readonly resultLength?: number | null;
   readonly error?: string | null;
@@ -138,34 +146,18 @@ const SETTINGS_STORAGE_KEY = 'lingflow.app.settings';
 const USAGE_STORAGE_KEY = 'lingflow.providerUsage.monthly';
 const HISTORY_STORAGE_KEY = 'lingflow.translation.history';
 const SELECTION_TEXT_STORAGE_KEY = 'lingflow.selection.text';
+const SELECTION_POSITION_STORAGE_KEY = 'lingflow.selection.position';
+const SELECTION_EXPANDED_STORAGE_KEY = 'lingflow.selection.expanded';
+const SELECTION_STATUS_STORAGE_KEY = 'lingflow.selection.status';
 const SELECTION_OVERLAY_LABEL = 'selection-overlay';
-const GLOBAL_MOUSE_UP_EVENT = 'lingflow://global-mouse-up';
+const DEFAULT_GLOBAL_SELECTION_SHORTCUT = 'Ctrl+E';
+const LEGACY_GLOBAL_SELECTION_SHORTCUTS = ['Alt+Shift+L'] as const;
+const SELECTION_ICON_SIZE = 36;
+const SELECTION_PANEL_WIDTH = 460;
+const SELECTION_PANEL_HEIGHT = 430;
 const DEFAULT_AI_SOURCE_ID = 'openai-default';
 const PROVIDER_USAGE_EVENT = 'lingflow://provider-usage';
 const EXTERNAL_SELECTION_EVENT = 'lingflow://external-selection';
-const DEFAULT_GLOBAL_SELECTION_EXCLUDED_APPS = [
-  'app.exe',
-  'ApplicationFrameHost.exe',
-  'cmd.exe',
-  'Code.exe',
-  'compmgmt.msc',
-  'conhost.exe',
-  'devenv.exe',
-  'explorer.exe',
-  'mmc.exe',
-  'OpenConsole.exe',
-  'powershell.exe',
-  'pwsh.exe',
-  'SearchHost.exe',
-  'ShellExperienceHost.exe',
-  'StartMenuExperienceHost.exe',
-  'SystemSettings.exe',
-  'taskmgr.exe',
-  'TextInputHost.exe',
-  'WindowsTerminal.exe',
-  'wt.exe',
-] as const;
-
 const DEFAULT_SETTINGS: AppSettings = {
   provider: 'ai',
   targetLanguage: 'zh-CN',
@@ -173,8 +165,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   onboardingCompleted: false,
   localProxyHost: '127.0.0.1',
   localProxyPort: 47631,
+  closeToTray: false,
   globalSelectionEnabled: false,
-  globalSelectionExcludedApps: DEFAULT_GLOBAL_SELECTION_EXCLUDED_APPS,
+  globalSelectionShortcut: DEFAULT_GLOBAL_SELECTION_SHORTCUT,
   aiFallbackEnabled: true,
   aiSources: [
     {
@@ -251,6 +244,9 @@ function LingFlowApp() {
   const [isTestingProviders, setIsTestingProviders] = useState(false);
   const globalSelectionBusyRef = useRef(false);
   const lastGlobalSelectionEventAtRef = useRef(0);
+  const globalSelectionSettingsRef = useRef(settings);
+  const globalShortcutTaskRef = useRef<Promise<void>>(Promise.resolve());
+  const registeredGlobalShortcutRef = useRef<string | null>(null);
   const usageMonthRef = useRef(currentUsageMonthKey());
   const isMobileClient = isMobileRuntime();
   const globalSelectionAvailable = !isMobileClient;
@@ -282,6 +278,10 @@ function LingFlowApp() {
   useEffect(() => {
     document.documentElement.classList.toggle('dark', settings.darkMode);
   }, [settings.darkMode]);
+
+  useEffect(() => {
+    globalSelectionSettingsRef.current = settings;
+  }, [settings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -366,50 +366,86 @@ function LingFlowApp() {
   }, [globalSelectionAvailable]);
 
   useEffect(() => {
-    if (!settingsLoaded || !settings.globalSelectionEnabled || !canUseTauri() || !globalSelectionAvailable) {
+    if (!settingsLoaded || !canUseTauri() || !globalSelectionAvailable) {
       return;
     }
 
     let disposed = false;
-    const mainWindow = getCurrentWebviewWindow();
-    const unlistenPromise = listen<{ readonly x: number; readonly y: number }>(GLOBAL_MOUSE_UP_EVENT, (event) => {
-      if (disposed) {
-        console.debug('[LingFlow selection] ignored because listener is disposed', event.payload);
-        return;
-      }
-      if (globalSelectionBusyRef.current) {
-        console.debug('[LingFlow selection] ignored because capture is busy', event.payload);
+    const activeShortcut = settings.globalSelectionShortcut;
+
+    const handleShortcut = () => {
+      if (disposed || globalSelectionBusyRef.current) {
         return;
       }
 
       const now = Date.now();
       if (now - lastGlobalSelectionEventAtRef.current < 400) {
-        console.debug('[LingFlow selection] ignored by frontend debounce', event.payload);
         return;
       }
       lastGlobalSelectionEventAtRef.current = now;
       globalSelectionBusyRef.current = true;
-      console.debug('[LingFlow selection] mouse-up event received', event.payload);
 
-      void mainWindow
-        .isFocused()
-        .then((isFocused) => {
-          if (isFocused) {
-            console.debug('[LingFlow selection] ignored because LingFlow main window is focused');
-            return undefined;
-          }
-          return detectGlobalSelection(settings, event.payload);
-        })
-        .finally(() => {
-          globalSelectionBusyRef.current = false;
-        });
+      window.setTimeout(() => {
+        void captureGlobalSelectionFromShortcut(globalSelectionSettingsRef.current)
+          .catch(async (error: unknown) => {
+            console.warn('[LingFlow selection] shortcut capture failed', error);
+            await showGlobalSelectionCaptureError(error);
+            try {
+              const diagnostics = await invoke<SelectionDiagnostics>('selection_diagnostics');
+              console.table(diagnostics.attempts);
+              console.info('[LingFlow selection diagnostics]', diagnostics);
+            } catch (diagnosticsError) {
+              console.warn('[LingFlow selection] failed to read diagnostics', diagnosticsError);
+            }
+          })
+          .finally(() => {
+            globalSelectionBusyRef.current = false;
+          });
+      }, 120);
+    };
+
+    async function configureShortcut() {
+      const shortcutsToRemove = new Set(
+        [registeredGlobalShortcutRef.current, ...LEGACY_GLOBAL_SELECTION_SHORTCUTS].filter(
+          (shortcut): shortcut is string => Boolean(shortcut),
+        ),
+      );
+      for (const shortcut of shortcutsToRemove) {
+        if (await isRegistered(shortcut)) {
+          await unregister(shortcut);
+        }
+      }
+      registeredGlobalShortcutRef.current = null;
+      if (disposed || !settings.globalSelectionEnabled) {
+        return;
+      }
+
+      await register(activeShortcut, (event) => {
+        if (event.state === 'Pressed') {
+          handleShortcut();
+        }
+      });
+      registeredGlobalShortcutRef.current = activeShortcut;
+      if (disposed) {
+        await unregister(activeShortcut);
+        registeredGlobalShortcutRef.current = null;
+        return;
+      }
+      setStatus(`桌面划词快捷键 ${activeShortcut} 已启用`);
+    }
+
+    const task = globalShortcutTaskRef.current
+      .catch(() => undefined)
+      .then(configureShortcut);
+    globalShortcutTaskRef.current = task;
+    void task.catch((error: unknown) => {
+      setStatus(error instanceof Error ? error.message : String(error));
     });
 
     return () => {
       disposed = true;
-      void unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [globalSelectionAvailable, settings, settingsLoaded]);
+  }, [globalSelectionAvailable, settings.globalSelectionEnabled, settings.globalSelectionShortcut, settingsLoaded]);
 
   useEffect(() => {
     let cancelled = false;
@@ -761,13 +797,14 @@ function LingFlowApp() {
 
       <aside className="right-rail">
         {globalSelectionAvailable ? (
-          <Card className="bg-[var(--surface-raised)]" title="全局划词">
+          <Card className="bg-[var(--surface-raised)]" title="划词翻译">
             <div className="grid gap-4 p-4">
               <Toggle
                 checked={settings.globalSelectionEnabled}
-                label="启用全局划词"
+                label={`启用 ${settings.globalSelectionShortcut}`}
                 onChange={(checked) => setSettings({ ...settings, globalSelectionEnabled: checked })}
               />
+              <p className="text-xs leading-5 text-[var(--muted)]">桌面软件中先选中文字，再按快捷键打开翻译窗。</p>
             </div>
           </Card>
         ) : null}
@@ -1101,7 +1138,7 @@ function OnboardingScreen({
           <h1>让翻译像水流一样融入阅读</h1>
           <p className="onboarding-copy">
             {showGlobalSelectionStep
-              ? '灵流会把桌面端、浏览器扩展和翻译服务源连接在一起。完成首次设置后，你可以直接使用文本翻译、网页双语翻译和全局划词悬浮窗。'
+              ? '灵流会把桌面端、浏览器扩展和翻译服务源连接在一起。浏览器划词继续显示悬浮图标，桌面软件中可通过快捷键安全唤起翻译窗。'
               : '灵流会把移动端、翻译服务源和历史记录连接在一起。完成首次设置后，你可以直接使用文本翻译、服务源配置和本地历史记录。'}
           </p>
           <div className="onboarding-actions">
@@ -1138,8 +1175,8 @@ function OnboardingScreen({
               <article className="onboarding-step">
                 <span>3</span>
                 <div>
-                  <h2>开启全局划词</h2>
-                  <p>在软件设置中开启全局划词后，选中文本即可唤起灵流悬浮翻译窗。</p>
+                  <h2>开启划词快捷键</h2>
+                  <p>默认快捷键为 Ctrl+E，可在软件设置中自定义。选中文字后按下快捷键即可打开翻译悬浮窗。</p>
                 </div>
               </article>
             </>
@@ -1167,45 +1204,73 @@ function OnboardingScreen({
   );
 }
 
-async function detectGlobalSelection(settings: AppSettings, position: { readonly x: number; readonly y: number }) {
-  try {
-    const roundedPosition = { x: Math.round(position.x), y: Math.round(position.y) };
-    const selectedText = await invoke<string>('capture_foreground_selection', {
-      excludedApps: settings.globalSelectionExcludedApps,
-      cursorPosition: roundedPosition,
-    });
-    const normalized = selectedText.trim();
-    if (!normalized) {
-      console.debug('[LingFlow selection] capture returned empty text', roundedPosition);
-      return;
-    }
-
-    console.debug('[LingFlow selection] capture succeeded', { characters: normalized.length, position: roundedPosition });
-    await showSelectionOverlay(normalized, position.x + 14, position.y + 16);
-  } catch (error) {
-    console.warn('[LingFlow selection] capture failed', error);
-    try {
-      const diagnostics = await invoke<SelectionDiagnostics>('selection_diagnostics');
-      console.table(diagnostics.attempts);
-      console.info('[LingFlow selection diagnostics]', diagnostics);
-    } catch (diagnosticsError) {
-      console.warn('[LingFlow selection] failed to read diagnostics', diagnosticsError);
-    }
+async function captureGlobalSelectionFromShortcut(settings: AppSettings) {
+  const position = await getCursorPosition();
+  const cursorPosition = { x: Math.round(position.x), y: Math.round(position.y) };
+  const selectedText = await invoke<string>('capture_foreground_selection', {
+    cursorPosition,
+    clipboardFallbackEnabled: true,
+  });
+  const normalized = selectedText.trim();
+  if (!normalized) {
+    throw new Error(`没有读取到选中文本，请先选中文字后再按 ${settings.globalSelectionShortcut}`);
   }
+
+  console.debug('[LingFlow selection] shortcut capture succeeded', {
+    characters: normalized.length,
+    cursorPosition,
+  });
+  await showSelectionOverlay(normalized, position.x + 14, position.y + 16, undefined, true, '已读取选中文字');
 }
 
-async function showSelectionOverlay(text: string, x: number, y: number) {
+async function showGlobalSelectionCaptureError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  let status = '没有读取到选中文字，请重新选择文本后再按快捷键';
+  if (message.toLowerCase().includes('clipboard')) {
+    status = '读取选区时无法安全访问剪贴板，请稍后重试';
+  }
+
+  let position = { x: 120, y: 120 };
+  try {
+    const cursor = await getCursorPosition();
+    position = { x: cursor.x + 14, y: cursor.y + 16 };
+  } catch {
+    // Use a stable fallback position when cursor coordinates are unavailable.
+  }
+  await showSelectionOverlay('', position.x, position.y, undefined, true, status);
+}
+
+async function showSelectionOverlay(
+  text: string,
+  x: number,
+  y: number,
+  capturePosition?: { readonly x: number; readonly y: number },
+  expanded = false,
+  status = expanded ? '已读取选中文字' : '点击图标翻译',
+) {
   window.localStorage.setItem(SELECTION_TEXT_STORAGE_KEY, text);
+  window.localStorage.setItem(SELECTION_EXPANDED_STORAGE_KEY, String(expanded));
+  window.localStorage.setItem(SELECTION_STATUS_STORAGE_KEY, status);
+  if (capturePosition) {
+    window.localStorage.setItem(SELECTION_POSITION_STORAGE_KEY, JSON.stringify(capturePosition));
+  } else {
+    window.localStorage.removeItem(SELECTION_POSITION_STORAGE_KEY);
+  }
 
   const existing = await WebviewWindow.getByLabel(SELECTION_OVERLAY_LABEL);
   if (existing) {
-    await existing.setResizable(false);
-    await existing.setShadow(false);
-    await existing.setSize(new PhysicalSize(36, 36));
+    await existing.setResizable(expanded);
+    await existing.setShadow(expanded);
+    await existing.setSize(
+      new PhysicalSize(expanded ? SELECTION_PANEL_WIDTH : SELECTION_ICON_SIZE, expanded ? SELECTION_PANEL_HEIGHT : SELECTION_ICON_SIZE),
+    );
     await existing.setPosition(new PhysicalPosition(x, y));
-    await setOverlayNoActivate();
+    await setOverlayNoActivate(!expanded);
     await existing.show();
-    await existing.emit('selection-text-updated', text);
+    await existing.emit<SelectionOverlayUpdatePayload>('selection-text-updated', { text, expanded, status });
+    if (expanded) {
+      await existing.setFocus();
+    }
     return;
   }
 
@@ -1214,27 +1279,30 @@ async function showSelectionOverlay(text: string, x: number, y: number) {
     title: 'LingFlow Selection',
     x,
     y,
-    width: 36,
-    height: 36,
+    width: expanded ? SELECTION_PANEL_WIDTH : SELECTION_ICON_SIZE,
+    height: expanded ? SELECTION_PANEL_HEIGHT : SELECTION_ICON_SIZE,
     decorations: false,
     alwaysOnTop: true,
-    resizable: false,
+    resizable: expanded,
     skipTaskbar: true,
     visible: true,
-    focus: false,
+    focus: expanded,
     transparent: true,
-    shadow: false,
+    shadow: expanded,
   });
 
   overlay.once('tauri://created', () => {
-    void setOverlayNoActivate();
-    void overlay.emit('selection-text-updated', text);
+    void setOverlayNoActivate(!expanded);
+    void overlay.emit<SelectionOverlayUpdatePayload>('selection-text-updated', { text, expanded, status });
+    if (expanded) {
+      void overlay.setFocus();
+    }
   });
 }
 
-async function setOverlayNoActivate() {
+async function setOverlayNoActivate(enabled = true) {
   try {
-    await invoke('set_overlay_no_activate', { label: SELECTION_OVERLAY_LABEL });
+    await invoke('set_overlay_no_activate', { label: SELECTION_OVERLAY_LABEL, enabled });
   } catch {
     // Best effort: the overlay still works if the platform style update is unavailable.
   }
@@ -1243,11 +1311,13 @@ async function setOverlayNoActivate() {
 function SelectionOverlayApp() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() => window.localStorage.getItem(SELECTION_EXPANDED_STORAGE_KEY) === 'true');
   const [sourceText, setSourceText] = useState(() => window.localStorage.getItem(SELECTION_TEXT_STORAGE_KEY) ?? '');
   const [sourceLanguage, setSourceLanguage] = useState('auto');
   const [translatedText, setTranslatedText] = useState('');
-  const [status, setStatus] = useState('点击图标翻译');
+  const [status, setStatus] = useState(
+    () => window.localStorage.getItem(SELECTION_STATUS_STORAGE_KEY) ?? '点击图标翻译',
+  );
   const [isTranslating, setIsTranslating] = useState(false);
 
   useEffect(() => {
@@ -1286,14 +1356,11 @@ function SelectionOverlayApp() {
 
   useEffect(() => {
     const overlay = getCurrentWebviewWindow();
-    const unlistenPromise = overlay.listen<string>('selection-text-updated', (event) => {
-      setSourceText(event.payload);
+    const unlistenPromise = overlay.listen<SelectionOverlayUpdatePayload>('selection-text-updated', (event) => {
+      setSourceText(event.payload.text);
       setTranslatedText('');
-      setStatus('点击图标翻译');
-      setExpanded(false);
-      void overlay.setResizable(false);
-      void overlay.setShadow(false);
-      void overlay.setSize(new PhysicalSize(36, 36));
+      setStatus(event.payload.status ?? (event.payload.expanded ? '已读取选中文字' : '点击图标翻译'));
+      setExpanded(event.payload.expanded);
     });
 
     return () => {
@@ -1310,19 +1377,66 @@ function SelectionOverlayApp() {
     }
   }, [configuredProviders, settings.provider]);
 
+  async function captureSelectionForOverlay() {
+    const storedPosition = window.localStorage.getItem(SELECTION_POSITION_STORAGE_KEY);
+    let cursorPosition: { readonly x: number; readonly y: number } | undefined;
+    if (storedPosition) {
+      try {
+        cursorPosition = JSON.parse(storedPosition) as { readonly x: number; readonly y: number };
+      } catch {
+        cursorPosition = undefined;
+      }
+    }
+    const captured = await invoke<string>('capture_foreground_selection', {
+      cursorPosition,
+      clipboardFallbackEnabled: true,
+    });
+    const normalized = captured.trim();
+    if (normalized) {
+      window.localStorage.setItem(SELECTION_TEXT_STORAGE_KEY, normalized);
+      setSourceText(normalized);
+    }
+    return normalized;
+  }
+
   async function expand() {
+    if (!sourceText.trim()) {
+      setStatus('姝ｅ湪璇诲彇閫変腑鏂囨湰');
+      try {
+        const captured = await captureSelectionForOverlay();
+        if (!captured) {
+          setStatus('娌℃湁璇诲彇鍒伴€変腑鏂囨湰');
+          return;
+        }
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : String(error));
+        try {
+          const diagnostics = await invoke<SelectionDiagnostics>('selection_diagnostics');
+          console.table(diagnostics.attempts);
+          console.info('[LingFlow selection diagnostics]', diagnostics);
+        } catch (diagnosticsError) {
+          console.warn('[LingFlow selection] failed to read diagnostics', diagnosticsError);
+        }
+        return;
+      }
+    }
+
+    window.localStorage.setItem(SELECTION_EXPANDED_STORAGE_KEY, 'true');
     setExpanded(true);
-    const window = getCurrentWebviewWindow();
-    await window.setSize(new PhysicalSize(460, 430));
-    await window.setShadow(true);
+    const overlayWindow = getCurrentWebviewWindow();
+    await setOverlayNoActivate(false);
+    await overlayWindow.setSize(new PhysicalSize(SELECTION_PANEL_WIDTH, SELECTION_PANEL_HEIGHT));
+    await overlayWindow.setShadow(true);
     try {
-      await window.setResizable(true);
+      await overlayWindow.setResizable(true);
+      await overlayWindow.setFocus();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     }
   }
 
   async function closeOverlay() {
+    window.localStorage.setItem(SELECTION_EXPANDED_STORAGE_KEY, 'false');
     await getCurrentWebviewWindow().close();
   }
 
@@ -1687,41 +1801,21 @@ function AppSettingsView({
   readonly onSettingsChange: (settings: AppSettings) => void;
   readonly settings: AppSettings;
 }) {
-  const [runningProcesses, setRunningProcesses] = useState<readonly string[]>([]);
-  const [isLoadingProcesses, setIsLoadingProcesses] = useState(false);
+  const [shortcutDraft, setShortcutDraft] = useState(settings.globalSelectionShortcut);
+  const [shortcutError, setShortcutError] = useState('');
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateError, setUpdateError] = useState('');
 
-  async function loadRunningProcesses() {
-    if (!canUseTauri()) {
-      return;
-    }
-
-    setIsLoadingProcesses(true);
+  function applyShortcut(value = shortcutDraft) {
     try {
-      setRunningProcesses(await invoke<string[]>('list_running_process_names'));
-    } finally {
-      setIsLoadingProcesses(false);
+      const normalized = normalizeGlobalShortcut(value);
+      setShortcutDraft(normalized);
+      setShortcutError('');
+      onSettingsChange({ ...settings, globalSelectionShortcut: normalized });
+    } catch (error) {
+      setShortcutError(error instanceof Error ? error.message : String(error));
     }
-  }
-
-  function updateProcessList(current: readonly string[], processName: string, checked: boolean) {
-    const normalized = processName.trim();
-    if (!normalized) {
-      return current;
-    }
-
-    const exists = current.some((item) => item.toLowerCase() === normalized.toLowerCase());
-    if (checked) {
-      return exists ? current : [...current, normalized];
-    }
-    return current.filter((item) => item.toLowerCase() !== normalized.toLowerCase());
-  }
-
-  function toggleExcludedProcess(processName: string, checked: boolean) {
-    const next = updateProcessList(settings.globalSelectionExcludedApps.filter(Boolean), processName, checked);
-    onSettingsChange({ ...settings, globalSelectionExcludedApps: next });
   }
 
   async function checkUpdates() {
@@ -1744,11 +1838,17 @@ function AppSettingsView({
     void checkUpdates();
   }, []);
 
+  useEffect(() => {
+    setShortcutDraft(settings.globalSelectionShortcut);
+    setShortcutError('');
+  }, [settings.globalSelectionShortcut]);
+
   return (
     <div className="settings-grid">
       <Card title="基础设置">
         <div className="grid gap-4 p-5">
           <Toggle checked={settings.darkMode} label="深色模式" onChange={(checked) => onSettingsChange({ ...settings, darkMode: checked })} />
+          <Toggle checked={settings.closeToTray} label="关闭时最小化到托盘" onChange={(checked) => onSettingsChange({ ...settings, closeToTray: checked })} />
         </div>
       </Card>
 
@@ -1784,44 +1884,36 @@ function AppSettingsView({
       ) : null}
 
       {globalSelectionAvailable ? (
-        <Card className="settings-wide" title="全局划词">
+        <Card className="settings-wide" title="划词翻译">
           <div className="grid gap-4 p-5">
-            <Toggle checked={settings.globalSelectionEnabled} label="启用全局划词" onChange={(checked) => onSettingsChange({ ...settings, globalSelectionEnabled: checked })} />
-            <Field hint="一行一个进程名，例如 explorer.exe、Code.exe、chrome.exe。命中后不会读取该软件中的选中文本。" label="进程黑名单">
-              <textarea
-                className="settings-textarea"
-                onChange={(event) =>
-                  onSettingsChange({
-                    ...settings,
-                    globalSelectionExcludedApps: event.currentTarget.value
-                      .split('\n')
-                      .map((item) => item.trim())
-                      .filter(Boolean),
-                  })
-                }
-                value={settings.globalSelectionExcludedApps.join('\n')}
-              />
-            </Field>
-            <div className="flex flex-wrap items-center gap-3">
-              <Button disabled={isLoadingProcesses} onClick={loadRunningProcesses} size="sm" variant="secondary">
-                {isLoadingProcesses ? <RefreshCcw className="animate-spin" size={14} /> : <RefreshCcw size={14} />}
-                加载当前进程
-              </Button>
-              <span className="text-xs text-[var(--muted)]">勾选后会加入进程黑名单。</span>
-            </div>
-            {runningProcesses.length ? (
-              <div className="process-picker">
-                {runningProcesses.map((processName) => {
-                  const checked = settings.globalSelectionExcludedApps.some((item) => item.toLowerCase() === processName.toLowerCase());
-                  return (
-                    <label className="process-option" key={processName}>
-                      <input checked={checked} onChange={(event) => toggleExcludedProcess(processName, event.currentTarget.checked)} type="checkbox" />
-                      <span>{processName}</span>
-                    </label>
-                  );
-                })}
+            <Toggle
+              checked={settings.globalSelectionEnabled}
+              label={`启用桌面划词快捷键（${settings.globalSelectionShortcut}）`}
+              onChange={(checked) => onSettingsChange({ ...settings, globalSelectionEnabled: checked })}
+            />
+            <p className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+              桌面软件：选中文字后按 {settings.globalSelectionShortcut}，直接打开翻译悬浮窗。浏览器扩展仍使用选中文字后显示悬浮图标的方式。
+            </p>
+            <Field hint="至少包含 Ctrl、Alt、Shift 中的一个修饰键，例如 Ctrl+E、Alt+Q 或 Ctrl+Shift+T。" label="自定义快捷键">
+              <div className="flex flex-wrap gap-2">
+                <TextInput
+                  aria-invalid={Boolean(shortcutError)}
+                  className="min-w-48 flex-1"
+                  onChange={(event) => setShortcutDraft(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      applyShortcut();
+                    }
+                  }}
+                  placeholder={DEFAULT_GLOBAL_SELECTION_SHORTCUT}
+                  value={shortcutDraft}
+                />
+                <Button onClick={() => applyShortcut()} size="sm" variant="secondary">应用</Button>
+                <Button onClick={() => applyShortcut(DEFAULT_GLOBAL_SELECTION_SHORTCUT)} size="sm" variant="ghost">恢复默认</Button>
               </div>
-            ) : null}
+            </Field>
+            {shortcutError ? <p className="text-xs text-[var(--danger)]">{shortcutError}</p> : null}
           </div>
         </Card>
       ) : null}
@@ -2421,9 +2513,6 @@ async function writeJsonAppData(key: string, value: unknown) {
 
 function mergeStoredSettings(storedSettings: Partial<AppSettings>, storedSecrets: Partial<AppSecrets>): AppSettings {
   const aiSourceApiKeys = storedSecrets.aiSourceApiKeys ?? {};
-  const globalSelectionExcludedApps = Array.from(
-    new Set([...(DEFAULT_SETTINGS.globalSelectionExcludedApps ?? []), ...(storedSettings.globalSelectionExcludedApps ?? [])]),
-  );
   const storedSources = storedSettings.aiSources?.length
     ? storedSettings.aiSources
     : [
@@ -2449,7 +2538,7 @@ function mergeStoredSettings(storedSettings: Partial<AppSettings>, storedSecrets
     ...DEFAULT_SETTINGS,
     ...storedSettings,
     onboardingCompleted: storedSettings.onboardingCompleted ?? DEFAULT_SETTINGS.onboardingCompleted,
-    globalSelectionExcludedApps,
+    globalSelectionShortcut: normalizeStoredGlobalShortcut(storedSettings.globalSelectionShortcut),
     aiFallbackEnabled: storedSettings.aiFallbackEnabled ?? DEFAULT_SETTINGS.aiFallbackEnabled,
     aiSources,
     ...storedSecrets,
@@ -2463,6 +2552,7 @@ function normalizeSettingsForRuntime(settings: AppSettings): AppSettings {
 
   return {
     ...settings,
+    closeToTray: false,
     globalSelectionEnabled: false,
   };
 }
@@ -2491,8 +2581,9 @@ function omitSecrets(settings: AppSettings) {
     onboardingCompleted: settings.onboardingCompleted,
     localProxyHost: settings.localProxyHost,
     localProxyPort: settings.localProxyPort,
+    closeToTray: settings.closeToTray,
     globalSelectionEnabled: settings.globalSelectionEnabled,
-    globalSelectionExcludedApps: settings.globalSelectionExcludedApps,
+    globalSelectionShortcut: settings.globalSelectionShortcut,
     aiFallbackEnabled: settings.aiFallbackEnabled,
     aiSources: settings.aiSources.map((source) => ({ ...source, apiKey: '' })),
     baiduAppId: settings.baiduAppId,
@@ -2524,6 +2615,84 @@ function splitModels(value: string) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeGlobalShortcut(value: string) {
+  const parts = value
+    .split('+')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2) {
+    throw new Error('快捷键必须包含修饰键和一个按键，例如 Ctrl+E');
+  }
+
+  const modifiers = new Set<string>();
+  let key = '';
+  for (const part of parts) {
+    const normalizedPart = part.toLowerCase();
+    if (normalizedPart === 'ctrl' || normalizedPart === 'control') {
+      modifiers.add('Ctrl');
+    } else if (normalizedPart === 'alt') {
+      modifiers.add('Alt');
+    } else if (normalizedPart === 'shift') {
+      modifiers.add('Shift');
+    } else {
+      if (key) {
+        throw new Error('快捷键只能包含一个普通按键');
+      }
+      key = normalizeShortcutKey(part);
+    }
+  }
+
+  if (modifiers.size === 0 || !key) {
+    throw new Error('快捷键至少需要 Ctrl、Alt、Shift 中的一个修饰键和一个普通按键');
+  }
+
+  const orderedModifiers = ['Ctrl', 'Alt', 'Shift'].filter((modifier) => modifiers.has(modifier));
+  return [...orderedModifiers, key].join('+');
+}
+
+function normalizeShortcutKey(value: string) {
+  const trimmed = value.trim();
+  if (/^[a-z0-9]$/i.test(trimmed)) {
+    return trimmed.toUpperCase();
+  }
+  const functionKey = /^f([1-9]|1\d|2[0-4])$/i.exec(trimmed);
+  if (functionKey) {
+    return `F${functionKey[1]}`;
+  }
+
+  const aliases: Record<string, string> = {
+    space: 'Space',
+    enter: 'Enter',
+    tab: 'Tab',
+    esc: 'Escape',
+    escape: 'Escape',
+    backspace: 'Backspace',
+    delete: 'Delete',
+    insert: 'Insert',
+    home: 'Home',
+    end: 'End',
+    pageup: 'PageUp',
+    pagedown: 'PageDown',
+    arrowup: 'ArrowUp',
+    arrowdown: 'ArrowDown',
+    arrowleft: 'ArrowLeft',
+    arrowright: 'ArrowRight',
+  };
+  const normalized = aliases[trimmed.toLowerCase()];
+  if (!normalized) {
+    throw new Error('普通按键仅支持字母、数字、F1-F24 和常用功能键');
+  }
+  return normalized;
+}
+
+function normalizeStoredGlobalShortcut(value?: string) {
+  try {
+    return normalizeGlobalShortcut(value || DEFAULT_GLOBAL_SELECTION_SHORTCUT);
+  } catch {
+    return DEFAULT_GLOBAL_SELECTION_SHORTCUT;
+  }
 }
 
 async function fetchAiModels(source: AiServiceSourceConfig) {
