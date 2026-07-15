@@ -175,7 +175,7 @@ const DEFAULT_SETTINGS: AppSettings = {
       name: 'OpenAI Compatible',
       baseUrl: 'https://one.gloscai.com',
       apiKey: '',
-      models: ['gpt-4.1-mini'],
+      models: [],
       enabled: true,
     },
   ],
