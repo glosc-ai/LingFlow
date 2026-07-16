@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "pnpm clean && pnpm --filter @lingflow/core build && pnpm --filter @lingflow/dom build && tsc -b && vite build",
+    "build": "pnpm clean && pnpm --filter @lingflow/core build && pnpm --filter @lingflow/dom build && pnpm --filter @lingflow/firebase build && tsc -b && vite build",
     "typecheck": "tsc -b",
     "lint": "oxlint",
     "test": "vitest run --passWithNoTests",
@@ -15,6 +15,7 @@
   "dependencies": {
     "@lingflow/core": "workspace:*",
     "@lingflow/dom": "workspace:*",
+    "@lingflow/firebase": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.21.0",
