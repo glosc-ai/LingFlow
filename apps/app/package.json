@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "pnpm --filter @lingflow/core build && pnpm --filter @lingflow/dom build && pnpm --filter @lingflow/firebase build && tsc -b && vite build",
     "typecheck": "tsc -b",
     "lint": "oxlint",
     "tauri": "tauri",
