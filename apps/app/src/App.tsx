@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { PhysicalPosition, PhysicalSize } from '@tauri-apps/api/dpi';
-import { listen } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { WebviewWindow, getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { cursorPosition as getCursorPosition } from '@tauri-apps/api/window';
 import { isRegistered, register, unregister } from '@tauri-apps/plugin-global-shortcut';
@@ -104,6 +104,10 @@ interface ExternalSelectionPayload {
   readonly y: number;
 }
 
+interface TranslationHistoryPayload extends Omit<HistoryItem, 'timestamp'> {
+  readonly timestamp: string;
+}
+
 interface SelectionOverlayUpdatePayload {
   readonly text: string;
   readonly expanded: boolean;
@@ -157,6 +161,7 @@ const SELECTION_PANEL_WIDTH = 460;
 const SELECTION_PANEL_HEIGHT = 430;
 const DEFAULT_AI_SOURCE_ID = 'openai-default';
 const PROVIDER_USAGE_EVENT = 'lingflow://provider-usage';
+const TRANSLATION_HISTORY_EVENT = 'lingflow://translation-history';
 const EXTERNAL_SELECTION_EVENT = 'lingflow://external-selection';
 const DEFAULT_SETTINGS: AppSettings = {
   provider: 'ai',
@@ -319,6 +324,37 @@ function LingFlowApp() {
   }, [recordProviderUsage]);
 
   useEffect(() => {
+    if (!canUseTauri()) {
+      return;
+    }
+
+    let disposed = false;
+    const unlistenPromise = listen<TranslationHistoryPayload>(TRANSLATION_HISTORY_EVENT, (event) => {
+      if (disposed) {
+        return;
+      }
+
+      const historyItem: HistoryItem = {
+        ...event.payload,
+        timestamp: new Date(event.payload.timestamp),
+      };
+      setHistory((items) => {
+        if (items.some((item) => item.id === historyItem.id)) {
+          return items;
+        }
+        const nextItems = [historyItem, ...items].slice(0, 500);
+        void writeStoredHistory(nextItems);
+        return nextItems;
+      });
+    });
+
+    return () => {
+      disposed = true;
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
     if (!canUseTauri() || !globalSelectionAvailable) {
       return;
     }
@@ -406,7 +442,7 @@ function LingFlowApp() {
 
     async function configureShortcut() {
       const shortcutsToRemove = new Set(
-        [registeredGlobalShortcutRef.current, ...LEGACY_GLOBAL_SELECTION_SHORTCUTS].filter(
+        [activeShortcut, registeredGlobalShortcutRef.current, ...LEGACY_GLOBAL_SELECTION_SHORTCUTS].filter(
           (shortcut): shortcut is string => Boolean(shortcut),
         ),
       );
@@ -1475,6 +1511,23 @@ function SelectionOverlayApp() {
       });
       setTranslatedText(response.text);
       setStatus(response.cached ? '命中缓存' : '翻译完成');
+      try {
+        await emit(PROVIDER_USAGE_EVENT, {
+          provider: response.provider,
+          characters: response.sourceText.length,
+        });
+        await emit<TranslationHistoryPayload>(TRANSLATION_HISTORY_EVENT, {
+          id: `${Date.now()}-selection`,
+          source: response.sourceText,
+          target: response.text,
+          provider: response.provider,
+          targetLanguage: response.targetLanguage,
+          timestamp: new Date().toISOString(),
+          cached: Boolean(response.cached),
+        });
+      } catch (syncError) {
+        console.warn('[LingFlow selection] failed to sync translation history', syncError);
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
