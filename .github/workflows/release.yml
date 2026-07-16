@@ -10,6 +10,7 @@ on:
       - apps/extension/manifest.ts
       - apps/app/src-tauri/Cargo.toml
       - apps/app/src-tauri/Cargo.lock
+      - apps/app/src-tauri/gen/android/app/build.gradle.kts
       - pnpm-lock.yaml
       - .github/workflows/release.yml
   workflow_dispatch:
@@ -58,7 +59,7 @@ jobs:
           echo "Previous version: ${previous_version:-<none>}"
           echo "Should release: $should_release"
 
-  build-release:
+  build-windows-extension:
     name: Build Windows Desktop And Extension
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
@@ -128,8 +129,131 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lingflow-release-${{ env.RELEASE_VERSION }}
-          path: artifacts/**
+          name: lingflow-windows-extension-${{ env.RELEASE_VERSION }}
+          path: artifacts
+          if-no-files-found: error
+
+  build-android:
+    name: Build Signed Android APK
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.check-version.outputs.version }}
+      NDK_VERSION: 28.2.13676358
+      ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/.signing/lingflow-release.jks
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK and NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;$NDK_VERSION"
+          echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Setup Rust Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust and Gradle builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/app/src-tauri -> target
+
+      - name: Cache Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate and decode Android signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEY_ALIAS" || { echo "ANDROID_KEY_ALIAS is not configured"; exit 1; }
+          test -n "$ANDROID_KEY_BASE64" || { echo "ANDROID_KEY_BASE64 is not configured"; exit 1; }
+          test -n "$ANDROID_KEY_PASSWORD" || { echo "ANDROID_KEY_PASSWORD is not configured"; exit 1; }
+          mkdir -p "$(dirname "$ANDROID_KEYSTORE_PATH")"
+          printf '%s' "$ANDROID_KEY_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+          test -s "$ANDROID_KEYSTORE_PATH" || { echo "Decoded Android keystore is empty"; exit 1; }
+          chmod 600 "$ANDROID_KEYSTORE_PATH"
+
+      - name: Build signed Android APK
+        run: pnpm --filter app tauri android build --apk --target aarch64 --ci
+
+      - name: Collect and verify signed APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_root="apps/app/src-tauri/gen/android/app/build/outputs/apk"
+          mapfile -t signed_apks < <(find "$output_root" -type f -name '*.apk' ! -name '*unsigned*' | sort)
+          if [ "${#signed_apks[@]}" -eq 0 ]; then
+            echo "No signed APK was produced under $output_root"
+            find "$output_root" -type f -name '*.apk' -print || true
+            exit 1
+          fi
+
+          apksigner="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$apksigner" || { echo "apksigner was not found"; exit 1; }
+          "$apksigner" verify --verbose --print-certs "${signed_apks[0]}"
+
+          mkdir -p artifacts/android
+          cp "${signed_apks[0]}" "artifacts/android/lingflow-android-arm64-v$RELEASE_VERSION.apk"
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lingflow-android-${{ env.RELEASE_VERSION }}
+          path: artifacts
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - check-version
+      - build-windows-extension
+      - build-android
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.check-version.outputs.version }}
+      RELEASE_TAG: ${{ needs.check-version.outputs.tag }}
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lingflow-*-${{ env.RELEASE_VERSION }}
+          path: artifacts
+          merge-multiple: true
+
+      - name: List release artifacts
+        shell: bash
+        run: find artifacts -type f -print
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -140,3 +264,4 @@ jobs:
           files: |
             artifacts/lingflow-extension-v${{ env.RELEASE_VERSION }}.zip
             artifacts/desktop/*
+            artifacts/android/*.apk

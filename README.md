@@ -350,6 +350,18 @@ pnpm --filter app tauri android build --apk --target aarch64 --ci
 apps/app/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
 ```
 
+GitHub Actions Release 会使用 Organization secrets 构建并校验签名 APK：
+
+- `ANDROID_KEY_ALIAS`：签名密钥别名。
+- `ANDROID_KEY_BASE64`：Android JKS/keystore 文件的 Base64 内容。
+- `ANDROID_KEY_PASSWORD`：keystore 与 key 使用的密码。
+
+工作流不会将证书或密码写入仓库。签名完成的 Release 产物名称为：
+
+```text
+lingflow-android-arm64-v0.5.0.apk
+```
+
 安装到真机：
 
 ```powershell
@@ -398,4 +410,4 @@ adb shell pm clear com.gloscai.lingflow
 - 部分浏览器保护页面无法注入 content script，例如 `chrome://`、扩展商店、部分内置 PDF 页面。
 - 跨域 iframe、浏览器内置页面或主动拦截键盘事件的编辑器可能无法使用输入框快捷翻译。
 - iOS 初始化和构建需要 macOS + Xcode。
-- Android 端已初始化并可构建 arm64 APK，尚未完成真机交互验收和签名发布；移动端不提供全局划词。
+- Android 端已初始化并配置 GitHub Actions 签名 arm64 APK，尚未完成真机交互验收；移动端不提供全局划词。
