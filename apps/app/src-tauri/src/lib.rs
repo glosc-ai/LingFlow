@@ -1,6 +1,7 @@
 ﻿use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
+    net::TcpStream,
     path::PathBuf,
     sync::{Arc, Mutex, RwLock},
     thread,
@@ -76,8 +77,13 @@ const EM_GETSEL_MESSAGE: u32 = 0x00B0;
 #[derive(Clone)]
 struct LocalProxyState {
     settings: Arc<RwLock<Option<AppRuntimeSettings>>>,
-    listeners: Arc<Mutex<HashSet<String>>>,
+    listener: Arc<Mutex<Option<ActiveLocalProxy>>>,
     app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
+}
+
+struct ActiveLocalProxy {
+    addr: String,
+    server: Arc<tiny_http::Server>,
 }
 
 impl AppRuntimeSettings {
@@ -170,7 +176,7 @@ struct GitHubReleaseAsset {
 pub fn run() {
     let proxy_state = LocalProxyState {
         settings: Arc::new(RwLock::new(None)),
-        listeners: Arc::new(Mutex::new(HashSet::new())),
+        listener: Arc::new(Mutex::new(None)),
         app_handle: Arc::new(Mutex::new(None)),
     };
     let proxy_app_handle = proxy_state.app_handle.clone();
@@ -1441,24 +1447,103 @@ fn delete_secret_from_app_data(state: &AppDataStoreState, name: &str) -> Result<
 }
 
 fn start_local_proxy(state: LocalProxyState, addr: String) -> Result<(), String> {
+    let mut active = state.listener.lock().map_err(|error| error.to_string())?;
+    if active
+        .as_ref()
+        .is_some_and(|listener| listener.addr == addr)
     {
-        let mut listeners = state.listeners.lock().map_err(|error| error.to_string())?;
-        if listeners.contains(&addr) {
-            return Ok(());
-        }
-        listeners.insert(addr.clone());
+        return Ok(());
     }
 
+    let mut previous = active.take();
     let server = match tiny_http::Server::http(&addr) {
-        Ok(server) => server,
-        Err(error) => {
-            if let Ok(mut listeners) = state.listeners.lock() {
-                listeners.remove(&addr);
+        Ok(server) => Arc::new(server),
+        Err(initial_error)
+            if previous.as_ref().is_some_and(|listener| {
+                local_proxy_port(&listener.addr) == local_proxy_port(&addr)
+            }) =>
+        {
+            let previous_addr = previous.as_ref().map(|listener| listener.addr.clone());
+            if let Some(listener) = previous.take() {
+                stop_local_proxy(listener);
             }
-            return Err(format!("failed to start LingFlow local proxy on {addr}: {error}"));
+
+            match bind_local_proxy_with_retry(&addr) {
+                Ok(server) => server,
+                Err(error) => {
+                    if let Some(previous_addr) = previous_addr {
+                        if let Ok(restored) = bind_local_proxy_with_retry(&previous_addr) {
+                            spawn_local_proxy_server(
+                                state.clone(),
+                                previous_addr.clone(),
+                                restored.clone(),
+                            );
+                            *active = Some(ActiveLocalProxy {
+                                addr: previous_addr,
+                                server: restored,
+                            });
+                        }
+                    }
+                    return Err(format!(
+                        "failed to switch LingFlow local proxy to {addr}: {initial_error}; retry failed: {error}"
+                    ));
+                }
+            }
+        }
+        Err(error) => {
+            *active = previous;
+            return Err(format!(
+                "failed to start LingFlow local proxy on {addr}: {error}"
+            ));
         }
     };
 
+    if let Some(listener) = previous.take() {
+        stop_local_proxy(listener);
+    }
+    spawn_local_proxy_server(state.clone(), addr.clone(), server.clone());
+    *active = Some(ActiveLocalProxy { addr, server });
+    Ok(())
+}
+
+fn local_proxy_port(addr: &str) -> Option<&str> {
+    addr.rsplit_once(':').map(|(_, port)| port)
+}
+
+fn stop_local_proxy(listener: ActiveLocalProxy) {
+    listener.server.unblock();
+    for _ in 0..20 {
+        if Arc::strong_count(&listener.server) <= 1 {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let wildcard_port = listener
+        .addr
+        .strip_prefix("0.0.0.0:")
+        .and_then(|port| port.parse::<u16>().ok());
+    drop(listener);
+
+    if let Some(port) = wildcard_port {
+        // 避免新建的 127.0.0.1 监听抢走唤醒连接，确保旧通配 accept 循环退出。
+        let _ = TcpStream::connect(("127.0.0.2", port));
+    }
+}
+
+fn bind_local_proxy_with_retry(addr: &str) -> Result<Arc<tiny_http::Server>, String> {
+    let mut last_error = None;
+    for _ in 0..20 {
+        match tiny_http::Server::http(addr) {
+            Ok(server) => return Ok(Arc::new(server)),
+            Err(error) => last_error = Some(error.to_string()),
+        }
+        thread::sleep(std::time::Duration::from_millis(25));
+    }
+    Err(last_error.unwrap_or_else(|| "unknown bind error".to_string()))
+}
+
+fn spawn_local_proxy_server(state: LocalProxyState, addr: String, server: Arc<tiny_http::Server>) {
     thread::spawn(move || {
         log::info!("LingFlow local proxy listening on http://{addr}");
 
@@ -1485,9 +1570,8 @@ fn start_local_proxy(state: LocalProxyState, addr: String) -> Result<(), String>
                 break;
             }
         }
+        log::info!("LingFlow local proxy stopped listening on http://{addr}");
     });
-
-    Ok(())
 }
 
 fn handle_local_proxy_request(mut request: tiny_http::Request, state: &LocalProxyState) {
