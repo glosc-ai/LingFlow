@@ -13,6 +13,22 @@ val tauriProperties = Properties().apply {
     }
 }
 
+val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")?.trim().orEmpty()
+val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")?.trim().orEmpty()
+val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD").orEmpty()
+val releaseSigningValues = listOf(releaseKeystorePath, releaseKeyAlias, releaseKeyPassword)
+val releaseSigningEnabled = releaseSigningValues.all { it.isNotEmpty() }
+
+if (!releaseSigningEnabled && releaseSigningValues.any { it.isNotEmpty() }) {
+    throw GradleException(
+        "Android release signing requires ANDROID_KEYSTORE_PATH, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD"
+    )
+}
+
+if (releaseSigningEnabled && !file(releaseKeystorePath).isFile) {
+    throw GradleException("Android release keystore was not found at ANDROID_KEYSTORE_PATH")
+}
+
 android {
     compileSdk = 36
     namespace = "com.gloscai.lingflow"
@@ -23,6 +39,16 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (releaseSigningEnabled) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseKeyPassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -38,6 +64,9 @@ android {
             }
         }
         getByName("release") {
+            if (releaseSigningEnabled) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

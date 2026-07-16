@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "windows-global-shortcut",
+  "description": "Allows the Windows desktop client to manage the global selection shortcut",
+  "platforms": [
+    "windows"
+  ],
+  "windows": [
+    "main",
+    "selection-overlay"
+  ],
+  "permissions": [
+    "global-shortcut:allow-is-registered",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister"
+  ]
+}

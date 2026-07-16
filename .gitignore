@@ -24,6 +24,8 @@ out/
 .env.*
 !.env.example
 *.local
+*.jks
+*.keystore
 
 # Logs
 *.log

@@ -19,9 +19,6 @@
     "core:window:allow-set-shadow",
     "core:window:allow-set-size",
     "core:window:allow-show",
-    "core:window:allow-toggle-maximize",
-    "global-shortcut:allow-is-registered",
-    "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister"
+    "core:window:allow-toggle-maximize"
   ]
 }
